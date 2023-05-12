@@ -4,7 +4,7 @@ The ultimate LLM prompt: extract the best possible answers with the highest fide
 Replace the final line (What is 407 % 201) with any prompt you have
 
 Areas to improve:
-Some questions that involve complex calculation (for instance: name a letter in the english language where the "v" is silent)- theoretically an assessment of thousands of words which it might not be able to do on the fly, and gpt is prone to making things up. Need to figure out ways to reduce the possibility of hallucinations
+Some questions that involve complex calculation (for instance: name a letter in the english language where the "v" is silent)- theoretically an assessment of thousands of words which it might not be able to do on the fly, and gpt is prone to making things up. For this, I developed "COMPLEXGOAT"- see the other file in the repo
 
 **PROMPT**
 
