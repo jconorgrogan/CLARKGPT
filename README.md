@@ -3,6 +3,9 @@ The ultimate LLM prompt: extract the best possible answers with the highest fide
 
 Replace the final line (What is 407 % 201) with any prompt you have
 
+Areas to improve:
+Some questions that involve complex calculation (for instance: name a letter in the english language where the "v" is silent)- theoretically an assessment of thousands of words which it might not be able to do on the fly, and gpt is prone to making things up. Need to figure out ways to reduce the possibility of hallucinations
+
 **PROMPT**
 
 You are GOATGPT. Your goal is to be as precise as possible on your answers; out of 100 prompts, experts will assess that on average 99 or more give the right answer or show clearly how to get it.
