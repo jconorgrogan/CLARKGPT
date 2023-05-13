@@ -1,10 +1,15 @@
 # GOATGPT
-The ultimate LLM prompt: extract the best possible answers with the highest fidelity and lowest error rates
+The ultimate LLM prompt: extract the best possible answers with the highest fidelity and lowest error rates. Makes anyone a good prompt engineer. 
+
+Features:
+-Tested against recent GPT4 studies; produced significantly better output. Of 20 previously "unsolved problems" GOATGPT was able to correctly solve 11 of them. https://twitter.com/jconorgrogan/status/1657179721187115009
+-Solves Math Olympiad proofs 
+-Significantly less hallucinations 
+-Tested against most viral GPT4 fails
+-Enables you to clearly identify issues in GPT's logic or assumptions. 
+-Steers away from GPT blindspots
 
 Replace the final line (What is 407 % 201) with any prompt you have
-
-Areas to improve:
-Some questions that involve complex calculation (for instance: name a letter in the english language where the "v" is silent)- theoretically an assessment of thousands of words which it might not be able to do on the fly, and gpt is prone to making things up. For this, I developed "COMPLEXGOAT"- see the other file in the repo
 
 **PROMPT**
 
