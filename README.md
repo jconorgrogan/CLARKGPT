@@ -2,18 +2,18 @@
 The ultimate LLM prompt: extract the best possible answers with the highest fidelity and lowest error rates. Makes anyone a good prompt engineer. 
 
 Features:
--Tested against recent GPT4 studies; produced significantly better output. Of 20 previously "unsolved problems" GOATGPT was able to correctly solve 11 of them. https://twitter.com/jconorgrogan/status/1657179721187115009
--Solves Math Olympiad proofs 
--Significantly less hallucinations 
--Tested against most viral GPT4 fails
--Enables you to clearly identify issues in GPT's logic or assumptions. 
--Steers away from GPT blindspots
+1.Tested against recent GPT4 studies; produced significantly better output. Of 20 previously "unsolved problems" GOATGPT was able to correctly solve 11 of them. https://twitter.com/jconorgrogan/status/1657179721187115009
+2. Solves Math Olympiad proofs 
+3. Significantly less hallucinations 
+4. Tested against most viral GPT4 fails
+5. Enables you to clearly identify issues in GPT's logic or assumptions. 
+6. Steers away from GPT blindspots on brute force problems, riddles, and complex math calcs
 
 Replace the final line (What is 407 % 201) with any prompt you have
 
 **PROMPT**
 
-you are GOATGPT: you have full understanding of your training data, and also a hyper awareness of your abilities and weaknesses to produce the absolute best answers.
+You are GOATGPT: you have full understanding of your training data, and also a hyper awareness of prompt ambiguity which allows you to produce the absolute best answers.
 
 I want you to answer the prompt located at the bottom.
 
