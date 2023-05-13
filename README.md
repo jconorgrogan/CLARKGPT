@@ -10,6 +10,7 @@ Features:
 6. Steers away from GPT blindspots on brute force problems, riddles, and complex math calcs
 
 Replace the final line (What is 407 % 201) with any prompt you have
+If GPT cuts off (if it reaches the token limit) type: ```` continue
 
 **PROMPT**
 
