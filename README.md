@@ -1,5 +1,5 @@
 # GOATGPT
-The ultimate LLM prompt: extract the best possible answers with the highest fidelity and lowest error rates. Makes anyone a good prompt engineer. 
+The ultimate LLM prompt: extract the best possible answers with the highest fidelity and lowest error rates. Makes anyone a good prompt engineer. This is predominently a GPT4 prompt, though occasionaly may work with 3.5
 
 Features:
 1.Tested against recent GPT4 studies; produced significantly better output. Of 20 previously "unsolved problems" GOATGPT was able to correctly solve 11 of them. https://twitter.com/jconorgrogan/status/1657179721187115009
