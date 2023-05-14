@@ -1,5 +1,5 @@
 # CLARKGPT
-The ultimate LLM prompt: extract the best possible answers with the highest fidelity and lowest error rates. Makes anyone a good prompt engineer. This is predominently a GPT4 prompt, though occasionaly may work with 3.5
+Reduce halluciations, easily invoke Chain-of-thought, understands and avoids its weaknesses, helps you debug your prompt to see where AI might be misinterpreting you. Generally produces FAR better outcomes on almost any task. This is predominently a GPT4 prompt, though occasionaly may work with 3.5
 
 Features:
 1.Tested against recent GPT4 studies; produced significantly better output. Of 20 previously "unsolved problems" GOATGPT was able to correctly solve 11 of them. https://twitter.com/jconorgrogan/status/1657179721187115009
