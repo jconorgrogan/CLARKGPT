@@ -1,5 +1,5 @@
-# CLARKGPT
-Simply adding the below in front of any of your GPT4 promps will produce FAR more accurate outcomes on almost any task. This is predominently a GPT4 prompt, though occasionaly may work with 3.5
+# CLARKGPT- Chain-of-Thought, Limitations, Accuracy, Reflection, Knowledge
+Simply adding the below in front of any of your GPT4 promps will produce FAR more accurate outcomes on almost any task. This is predominently a GPT4 prompt, though occasionaly may work with 3.5. 
 
 Features:
 1.Tested against recent GPT4 studies; produced significantly better output. Of 20 previously "unsolved problems" CLARK was able to correctly solve 11 of them (See excel file in this github)
