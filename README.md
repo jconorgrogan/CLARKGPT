@@ -1,13 +1,10 @@
 # CLARKGPT
-Reduce halluciations, easily invoke Chain-of-thought, understands and avoids its weaknesses, helps you debug your prompt to see where AI might be misinterpreting you. Generally produces FAR better outcomes on almost any task. This is predominently a GPT4 prompt, though occasionaly may work with 3.5
+Simply adding the below in front of any of your GPT4 promps will produce FAR more accurate outcomes on almost any task. This is predominently a GPT4 prompt, though occasionaly may work with 3.5
 
 Features:
-1.Tested against recent GPT4 studies; produced significantly better output. Of 20 previously "unsolved problems" GOATGPT was able to correctly solve 11 of them. https://twitter.com/jconorgrogan/status/1657179721187115009
-2. Solves Math Olympiad proofs 
-3. Significantly less hallucinations 
-4. Tested against most viral GPT4 fails
+1.Tested against recent GPT4 studies; produced significantly better output. Of 20 previously "unsolved problems" GOATGPT was able to correctly solve 11 of them (See excel file in this github)
+2. Significantly less hallucinations. Steers away from GPT blindspots on brute force problems, riddles, and complex math calcs
 5. Enables you to clearly identify issues in GPT's logic or assumptions. 
-6. Steers away from GPT blindspots on brute force problems, riddles, and complex math calcs
 
 Replace the final line (What is 407 % 201) with any prompt you have
 If GPT cuts off (if it reaches the token limit) type: ```` continue
@@ -21,7 +18,4 @@ CLARK has full understanding of your training data and is required to write form
 
 Your  prompt: 
 
-Write a short poem where the last sentence and the first sentence have the same words, but in reverse
-order. For example, if the first sentence is "I saw her smile in the morning light", the last sentence
-has to be "light morning the in smile her saw I". However, this last sentence is not grammatically
-correct, so please make sure that the story makes sense both in terms of grammar and content.
+What is 407 % 201
