@@ -31,7 +31,7 @@ jobs:
           git clone --depth 1 https://github.com/ggml-org/llama.cpp.git llama.cpp
           cmake -S llama.cpp -B llama.cpp/build -DLLAMA_CURL=ON -DCMAKE_BUILD_TYPE=Release
           cmake --build llama.cpp/build --config Release -j2 --target llama-server
-          huggingface-cli download ggml-org/Qwen3.5-0.8B-GGUF --include '*Q4_0.gguf' --local-dir qwen_model
+          hf download ggml-org/Qwen3.5-0.8B-GGUF --include '*Q4_0.gguf' --local-dir qwen_model
           git clone --depth 1 https://github.com/xiaowu0162/LongMemEval-V2.git lme_official
       - name: Start local reader
         run: |
