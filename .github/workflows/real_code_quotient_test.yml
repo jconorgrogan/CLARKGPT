@@ -1,0 +1,40 @@
+name: real-code-quotient-test
+on:
+  push:
+    branches: [irrelevance-real-code-test]
+  workflow_dispatch:
+jobs:
+  benchmark:
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - tag: codebert
+            model: microsoft/codebert-base
+          - tag: contrabert
+            model: claudios/ContraBERT_C
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install transformers==4.56.2 pandas numpy safetensors tree_sitter tree_sitter_cpp
+      - name: Run real benchmark
+        env:
+          HF_HUB_DISABLE_XET: '1'
+          TOKENIZERS_PARALLELISM: 'false'
+        run: |
+          python research/real_code_quotient_test.py \
+            --model '${{ matrix.model }}' \
+            --out 'real_code_results_${{ matrix.tag }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: real-code-quotient-${{ matrix.tag }}
+          path: real_code_results_${{ matrix.tag }}/
