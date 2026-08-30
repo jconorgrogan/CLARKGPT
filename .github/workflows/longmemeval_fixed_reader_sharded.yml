@@ -36,7 +36,7 @@ jobs:
           cmake --build llama.cpp/build --config Release -j2 --target llama-server
           hf download ggml-org/Qwen3.5-0.8B-GGUF --include '*Q4_0.gguf' --local-dir qwen_model
           git clone --depth 1 https://github.com/xiaowu0162/LongMemEval-V2.git lme_official
-      - name: Restrict the preregistered 120-question set to this shard
+      - name: Patch reader and restrict the preregistered 120-question set to this shard
         env:
           SHARD_INDEX: ${{ matrix.shard }}
           NUM_SHARDS: '4'
@@ -44,6 +44,7 @@ jobs:
           python - <<'PY'
           import os
           from pathlib import Path
+
           p=Path('research/longmemeval_fixed_reader_parallel.py')
           s=p.read_text()
           needle='    selected = base.choose_questions(questions, args.limit, args.selection_seed)\n'
@@ -51,6 +52,14 @@ jobs:
           if needle not in s:
               raise SystemExit('selection hook not found')
           p.write_text(s.replace(needle,replacement,1))
+
+          base=Path('research/longmemeval_fixed_reader_local.py')
+          b=base.read_text()
+          hook='        "top_p": 1,\n'
+          if hook not in b:
+              raise SystemExit('reader payload hook not found')
+          b=b.replace(hook,hook+'        "reasoning_effort": "none",\n',1)
+          base.write_text(b)
           PY
       - name: Start four-slot reader
         run: |
@@ -66,7 +75,7 @@ jobs:
           done
           cat llama_server.log
           exit 1
-      - name: Run paired shard
+      - name: Run paired shard with thinking disabled
         env:
           HF_HUB_DISABLE_XET: '0'
         run: |
@@ -84,7 +93,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: longmemeval-fixed-reader-shard-${{ matrix.shard }}
+          name: longmemeval-fixed-reader-no-thinking-shard-${{ matrix.shard }}
           path: |
-            longmemeval_fixed_reader_shard_${{ matrix.shard }}/
+            longmemeval_fixed_reader_shard_${{ matrix.shard }}/*.csv
+            longmemeval_fixed_reader_shard_${{ matrix.shard }}/*.json
             llama_server.log
