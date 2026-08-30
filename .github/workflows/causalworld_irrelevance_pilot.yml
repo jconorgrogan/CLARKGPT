@@ -25,6 +25,16 @@ jobs:
         env:
           OUT: causalworld_results
         run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('research/causalworld_irrelevance_pilot.py')
+          s = p.read_text()
+          block1 = '''        # Vary the foreground robot pose while preserving the goal label.\n        for _ in range(int(rng.randint(0, 3))):\n            env.step(env.action_space.sample())\n'''
+          block2 = '''        for _ in range(int(rng.randint(0, 3))):\n            env.step(env.action_space.sample())\n        a = image_tensor(set_color(env, c0))\n'''
+          s = s.replace(block1, '')
+          s = s.replace(block2, '        a = image_tensor(set_color(env, c0))\n')
+          p.write_text(s)
+          PY
           # Preserve the same protocol while reducing image and optimization cost.
           sed -i 's/h \/\/ 32/h \/\/ 16/g; s/w \/\/ 32/w \/\/ 16/g; s/:32, :32/:16, :16/g' research/causalworld_irrelevance_pilot.py
           sed -i 's/collect(envs, 800/collect(envs, 500/g; s/collect(envs, 400/collect(envs, 250/g' research/causalworld_irrelevance_pilot.py
