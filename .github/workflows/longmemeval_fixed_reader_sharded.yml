@@ -58,15 +58,20 @@ jobs:
           hook='        "top_p": 1,\n'
           if hook not in b:
               raise SystemExit('reader payload hook not found')
-          b=b.replace(hook,hook+'        "reasoning_effort": "none",\n',1)
+          b=b.replace(
+              hook,
+              hook+'        "reasoning_effort": "none",\n        "chat_template_kwargs": {"enable_thinking": False},\n',
+              1,
+          )
           base.write_text(b)
           PY
-      - name: Start four-slot reader
+      - name: Start four-slot non-thinking reader
         run: |
           MODEL_PATH=$(find qwen_model -name '*Q4_0.gguf' | head -1)
           test -n "$MODEL_PATH"
           nohup ./llama.cpp/build/bin/llama-server \
             -m "$MODEL_PATH" -c 32768 -t 4 -tb 4 -b 1024 -ub 128 \
+            --reasoning off --chat-template-kwargs '{"enable_thinking":false}' \
             --host 127.0.0.1 --port 8080 --parallel 4 \
             > llama_server.log 2>&1 &
           for i in $(seq 1 90); do
