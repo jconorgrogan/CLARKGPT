@@ -1,0 +1,41 @@
+name: github-models-probe
+on:
+  push:
+    branches: [irrelevance-benchmark-ladder]
+    paths: ['.github/workflows/github_models_probe.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  models: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe fixed reader endpoint
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          payload = {
+            "model": "openai/gpt-4.1-mini",
+            "messages": [{"role":"user","content":"Return exactly OK"}],
+            "temperature": 0,
+            "max_tokens": 8
+          }
+          req = urllib.request.Request(
+            "https://models.github.ai/inference/chat/completions",
+            data=json.dumps(payload).encode(),
+            headers={"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}", "Content-Type":"application/json"},
+            method="POST",
+          )
+          with urllib.request.urlopen(req, timeout=120) as r:
+            out=r.read().decode()
+          print(out)
+          open("probe.json","w").write(out)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: github-models-probe
+          path: probe.json
