@@ -1,0 +1,90 @@
+name: longmemeval-v2-fixed-reader-sharded
+on:
+  push:
+    branches: [irrelevance-benchmark-ladder]
+    paths:
+      - '.github/workflows/longmemeval_fixed_reader_sharded.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  shard:
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libcurl4-openssl-dev
+          python -m pip install --upgrade pip
+          pip install huggingface_hub hf_xet numpy pandas scipy scikit-learn requests
+      - name: Build reader runtime and download model
+        env:
+          HF_HUB_DISABLE_XET: '0'
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git llama.cpp
+          cmake -S llama.cpp -B llama.cpp/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build llama.cpp/build --config Release -j2 --target llama-server
+          hf download ggml-org/Qwen3.5-0.8B-GGUF --include '*Q4_0.gguf' --local-dir qwen_model
+          git clone --depth 1 https://github.com/xiaowu0162/LongMemEval-V2.git lme_official
+      - name: Restrict the preregistered 120-question set to this shard
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
+          NUM_SHARDS: '4'
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path('research/longmemeval_fixed_reader_parallel.py')
+          s=p.read_text()
+          needle='    selected = base.choose_questions(questions, args.limit, args.selection_seed)\n'
+          replacement=needle+f'    selected = selected[{int(os.environ["SHARD_INDEX"])}::{int(os.environ["NUM_SHARDS"])}]\n'
+          if needle not in s:
+              raise SystemExit('selection hook not found')
+          p.write_text(s.replace(needle,replacement,1))
+          PY
+      - name: Start four-slot reader
+        run: |
+          MODEL_PATH=$(find qwen_model -name '*Q4_0.gguf' | head -1)
+          test -n "$MODEL_PATH"
+          nohup ./llama.cpp/build/bin/llama-server \
+            -m "$MODEL_PATH" -c 32768 -t 4 -tb 4 -b 1024 -ub 128 \
+            --host 127.0.0.1 --port 8080 --parallel 4 \
+            > llama_server.log 2>&1 &
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          cat llama_server.log
+          exit 1
+      - name: Run paired shard
+        env:
+          HF_HUB_DISABLE_XET: '0'
+        run: |
+          python research/longmemeval_fixed_reader_parallel.py \
+            --official-repo lme_official \
+            --base-url http://127.0.0.1:8080 \
+            --model Qwen3.5-0.8B-Q4_0 \
+            --limit 120 \
+            --context-chars 16000 \
+            --workers 4 \
+            --out longmemeval_fixed_reader_shard_${{ matrix.shard }}
+      - name: Print server log tail
+        if: always()
+        run: tail -100 llama_server.log || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: longmemeval-fixed-reader-shard-${{ matrix.shard }}
+          path: |
+            longmemeval_fixed_reader_shard_${{ matrix.shard }}/
+            llama_server.log
