@@ -1,0 +1,24 @@
+name: cancel-invalid-reader-runs
+on:
+  push:
+    branches: [irrelevance-benchmark-ladder]
+    paths: ['.github/workflows/cancel_invalid_readers.yml']
+  workflow_dispatch:
+permissions:
+  actions: write
+  contents: read
+jobs:
+  cancel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel thinking-enabled runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for RUN_ID in 33336127459 33337102487; do
+            curl -fsS -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/jconorgrogan/CLARKGPT/actions/runs/$RUN_ID/cancel" || true
+          done
