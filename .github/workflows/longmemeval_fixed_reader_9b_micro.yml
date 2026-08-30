@@ -1,0 +1,152 @@
+name: longmemeval-v2-fixed-reader-9b-micro
+on:
+  push:
+    branches: [irrelevance-benchmark-ladder]
+    paths:
+      - '.github/workflows/longmemeval_fixed_reader_9b_micro.yml'
+  workflow_dispatch:
+
+jobs:
+  score:
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - method: raw
+            domain: web
+          - method: unique
+            domain: web
+          - method: raw
+            domain: enterprise
+          - method: unique
+            domain: enterprise
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      HF_HUB_DISABLE_XET: '0'
+      TOKENIZERS_PARALLELISM: 'false'
+      OPENAI_API_KEY: local-dummy-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev
+          python -m pip install --upgrade pip
+          pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install huggingface_hub hf_xet scikit-learn scipy pandas
+
+      - name: Install official harness and memory backend
+        run: |
+          git clone --depth 1 https://github.com/xiaowu0162/LongMemEval-V2.git lme
+          pip install -e ./lme
+          cp research/lme_fixed_reader_memory.py lme/memory_modules/distinction_tfidf.py
+          sed -i '/sublinear_tf=True/d' lme/memory_modules/distinction_tfidf.py
+          printf '\nfrom .distinction_tfidf import DistinctionTfidfMemory  # noqa: E402,F401\n' >> lme/memory_modules/memory.py
+
+      - name: Prepare identical four-question domain slice
+        run: |
+          python - <<'PY'
+          from huggingface_hub import snapshot_download
+          snapshot_download(
+              repo_id='xiaowu0162/longmemeval-v2',
+              repo_type='dataset',
+              local_dir='lme/data/longmemeval-v2',
+              allow_patterns=['questions.jsonl','trajectories.jsonl','haystacks/lme_v2_small.json'],
+          )
+          PY
+          python research/lme_select_fixed_reader_subset.py \
+            --data-root lme/data/longmemeval-v2 \
+            --output-root lme/subset \
+            --per-domain 4 \
+            --seed 260830
+          mkdir -p lme/configs
+          if [ '${{ matrix.method }}' = 'raw' ]; then MODE=raw; else MODE=unique_lines; fi
+          cat > lme/configs/current.json <<JSON
+          {"memory_type":"distinction_tfidf","memory_params":{"mode":"$MODE","chunk_chars":5000,"chunk_overlap":300,"top_k":20}}
+          JSON
+
+      - name: Build reader and fetch Qwen3.5-9B Q4_K_M
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git llama.cpp
+          cmake -S llama.cpp -B llama.cpp/build -G Ninja -DGGML_NATIVE=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build llama.cpp/build --target llama-server -j 4
+          hf download tinnlab/Qwen3.5-9B-GGUF Qwen3.5-9B-Q4_K_M.gguf --local-dir qwen9b
+
+      - name: Start non-thinking reader
+        run: |
+          nohup ./llama.cpp/build/bin/llama-server \
+            -m qwen9b/Qwen3.5-9B-Q4_K_M.gguf \
+            --alias Qwen/Qwen3.5-9B \
+            --host 127.0.0.1 --port 8023 \
+            --ctx-size 8192 --threads 4 --threads-batch 4 --parallel 1 \
+            --cache-type-k q8_0 --cache-type-v q8_0 \
+            --reasoning off --chat-template-kwargs '{"enable_thinking":false}' \
+            --no-warmup > llama-server.log 2>&1 &
+          echo $! > llama-server.pid
+          for i in $(seq 1 180); do
+            if curl -fsS http://127.0.0.1:8023/health >/dev/null 2>&1; then exit 0; fi
+            if ! kill -0 "$(cat llama-server.pid)" 2>/dev/null; then cat llama-server.log; exit 1; fi
+            sleep 3
+          done
+          cat llama-server.log
+          exit 1
+
+      - name: Run official fixed-reader micro-shard
+        working-directory: lme
+        run: |
+          python evaluation/harness.py \
+            --domain '${{ matrix.domain }}' \
+            --questions-path 'subset/${{ matrix.domain }}_questions.json' \
+            --haystack-path 'subset/${{ matrix.domain }}_haystack.json' \
+            --trajectories-path data/longmemeval-v2/trajectories.jsonl \
+            --memory-config-path configs/current.json \
+            --output-dir 'fixed_reader_${{ matrix.method }}_${{ matrix.domain }}' \
+            --model Qwen/Qwen3.5-9B \
+            --base-url http://127.0.0.1:8023/v1 \
+            --api-key-env OPENAI_API_KEY \
+            --memory-context-max-tokens 4000 \
+            --max-completion-tokens 160 \
+            --reader-max-concurrent-requests 1 \
+            --prompt-build-max-workers 1 \
+            --timeout-seconds 3600 \
+            --temperature 0 --top-p 1 \
+            --reader-disable-thinking
+
+      - name: Extract compact result
+        working-directory: lme
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+          method='${{ matrix.method }}'; domain='${{ matrix.domain }}'
+          run=Path(f'fixed_reader_{method}_{domain}')
+          rec=[json.loads(x) for x in (run/'per_question.jsonl').read_text().splitlines() if x.strip()]
+          rows=[]
+          for r in rec:
+              meta=r.get('memory_post_query_metadata') or {}
+              rows.append({'method':method,'domain':domain,'question_id':r['question_id'],'question_type':r['question_type'],'score':float(r['score']),'memory_query_seconds':float(r['memory_query_duration_seconds']),'memory_context_tokens':int(r['memory_context_token_count']),'raw_characters':meta.get('raw_characters'),'stored_characters':meta.get('stored_characters'),'storage_ratio':meta.get('storage_ratio'),'response':r['response_parsed_boxed'],'gold':r['answer_gold']})
+          df=pd.DataFrame(rows)
+          df.to_csv(run/'compact.csv',index=False)
+          print(df.to_string(index=False))
+          PY
+
+      - name: Print reader tail
+        if: always()
+        run: tail -80 llama-server.log || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lme-9b-micro-${{ matrix.method }}-${{ matrix.domain }}
+          path: |
+            lme/fixed_reader_${{ matrix.method }}_${{ matrix.domain }}/compact.csv
+            lme/fixed_reader_${{ matrix.method }}_${{ matrix.domain }}/aggregated_metrics.json
+            lme/subset/manifest.json
+            llama-server.log
