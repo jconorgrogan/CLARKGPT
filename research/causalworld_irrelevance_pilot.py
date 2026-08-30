@@ -42,7 +42,6 @@ def set_color(env, color):
 
 def image_tensor(obs):
     x = np.asarray(obs)
-    # Pixel mode with one camera normally returns [current, goal, H, W, C].
     if x.ndim == 4:
         pass
     elif x.ndim == 3:
@@ -54,11 +53,24 @@ def image_tensor(obs):
     x = x[..., :3].astype(np.float32)
     if x.max() > 1.5:
         x /= 255.0
-    # Fast deterministic downsample to <=32x32.
     h, w = x.shape[-3], x.shape[-2]
-    sh, sw = max(1, h // 32), max(1, w // 32)
-    x = x[:, ::sh, ::sw, :][:, :32, :32, :]
-    return x
+    sh, sw = max(1, h // 16), max(1, w // 16)
+    return x[:, ::sh, ::sw, :][:, :16, :16, :]
+
+
+def sample_actions(env, rng, max_steps=4):
+    steps = int(rng.randint(0, max_steps + 1))
+    low = np.asarray(env.action_space.low, dtype=float)
+    high = np.asarray(env.action_space.high, dtype=float)
+    return [rng.uniform(low, high).astype(np.float32) for _ in range(steps)]
+
+
+def replay(env, color, actions):
+    env.reset()
+    obs = set_color(env, color)
+    for action in actions:
+        obs, _, _, _ = env.step(action)
+    return image_tensor(obs)
 
 
 def collect(envs, n, aligned, seed, random_color=False):
@@ -69,10 +81,7 @@ def collect(envs, n, aligned, seed, random_color=False):
     for _ in range(n):
         y = int(rng.randint(0, 2))
         env = envs[y]
-        env.reset()
-        # Vary the foreground robot pose while preserving the goal label.
-        for _ in range(int(rng.randint(0, 3))):
-            env.step(env.action_space.sample())
+        actions = sample_actions(env, rng)
         if random_color:
             bit = int(rng.randint(0, 2))
         else:
@@ -80,7 +89,7 @@ def collect(envs, n, aligned, seed, random_color=False):
             bit = y if copy else 1 - y
             if not aligned:
                 bit = 1 - bit
-        images.append(image_tensor(set_color(env, c1 if bit else c0)))
+        images.append(replay(env, c1 if bit else c0, actions))
         labels.append(y)
     return np.stack(images), np.asarray(labels, dtype=np.int64)
 
@@ -90,16 +99,16 @@ def collect_pairs(envs, pairs, seed):
     c0 = np.array([0.10, 0.22, 0.85])
     c1 = np.array([0.85, 0.18, 0.10])
     out = []
+    replay_errors = []
     for _ in range(pairs):
         y = int(rng.randint(0, 2))
         env = envs[y]
-        env.reset()
-        for _ in range(int(rng.randint(0, 3))):
-            env.step(env.action_space.sample())
-        a = image_tensor(set_color(env, c0))
-        b = image_tensor(set_color(env, c1))
+        actions = sample_actions(env, rng)
+        a = replay(env, c0, actions)
+        b = replay(env, c1, actions)
         out.append((a, b))
-    return out
+        replay_errors.append(float(np.mean(np.abs(a - b))))
+    return out, replay_errors
 
 
 def compile_mask(pairs):
@@ -118,7 +127,7 @@ def transform(X, mask=None):
     return Z.reshape(len(Z), -1)
 
 
-def fit_curve(X, y, Xid, yid, Xood, yood, seed, epochs=24):
+def fit_curve(X, y, Xid, yid, Xood, yood, seed, epochs=10):
     rng = np.random.RandomState(8000 + seed)
     clf = SGDClassifier(
         loss="log_loss", alpha=3e-5, learning_rate="constant", eta0=0.03,
@@ -148,13 +157,12 @@ def main():
     t0 = time.time()
     envs = [make_env(-0.045, 0), make_env(0.045, 1)]
     try:
-        # One shared rendered dataset; model uncertainty comes from optimization seeds.
-        Xtr, ytr = collect(envs, 800, aligned=True, seed=11)
-        Xid, yid = collect(envs, 400, aligned=True, seed=12)
-        Xood, yood = collect(envs, 800, aligned=False, seed=13)
-        Xrand, yrand = collect(envs, 800, aligned=True, seed=14, random_color=True)
-        pairs4 = collect_pairs(envs, 4, seed=21)
-        pairs64 = collect_pairs(envs, 64, seed=22)
+        Xtr, ytr = collect(envs, 400, aligned=True, seed=11)
+        Xid, yid = collect(envs, 200, aligned=True, seed=12)
+        Xood, yood = collect(envs, 400, aligned=False, seed=13)
+        Xrand, yrand = collect(envs, 400, aligned=True, seed=14, random_color=True)
+        pairs4, pair_errors4 = collect_pairs(envs, 4, seed=21)
+        pairs64, pair_errors64 = collect_pairs(envs, 64, seed=22)
     finally:
         for env in envs:
             env.close()
@@ -176,7 +184,7 @@ def main():
     }
 
     run_rows = []
-    for seed in range(8):
+    for seed in range(4):
         for method, (a, b, c) in methods.items():
             train_y = yrand if method == "domain_randomized" else ytr
             curve = fit_curve(a, train_y, b, yid, c, yood, seed)
@@ -215,9 +223,13 @@ def main():
         "input_shape": list(Xtr.shape[1:]),
         "four_pair_mask_fraction": float(mask4.mean()),
         "sixtyfour_pair_mask_fraction": float(mask64.mean()),
+        "four_vs_sixtyfour_mask_agreement": float(np.mean(mask4 == mask64)),
+        "mean_pair_pixel_change_4": float(np.mean(pair_errors4)),
+        "mean_pair_pixel_change_64": float(np.mean(pair_errors64)),
         "stage_colors": [[0.10, 0.22, 0.85], [0.85, 0.18, 0.10]],
         "train_color_alignment": 0.95, "test_color_reversal": True,
-        "note": "Official CausalWorld pixel simulator; supervised goal-side pilot, not full RL leaderboard protocol."
+        "max_replayed_actions": 4,
+        "note": "Official CausalWorld pixel simulator; supervised goal-side pilot with deterministic pose variation, not full RL leaderboard protocol."
     }
     (OUT / "metadata.json").write_text(json.dumps(metadata, indent=2))
     print("FINAL")
