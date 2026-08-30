@@ -1,0 +1,32 @@
+name: causalworld-irrelevance-pilot
+on:
+  push:
+    branches: [irrelevance-benchmark-ladder]
+    paths:
+      - 'research/causalworld_irrelevance_pilot.py'
+      - '.github/workflows/causalworld_irrelevance_pilot.yml'
+  workflow_dispatch:
+jobs:
+  pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+      - name: Install compatible CPU stack
+        run: |
+          python -m pip install --upgrade 'pip<25'
+          pip install 'numpy<1.24' 'scipy<1.11' 'scikit-learn<1.4' 'pandas<2.1'
+          pip install 'gym==0.17.3' 'pybullet==3.2.6'
+          pip install causal_world
+      - name: Run official-simulator pilot
+        env:
+          OUT: causalworld_results
+        run: python research/causalworld_irrelevance_pilot.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: causalworld-irrelevance-pilot
+          path: causalworld_results/
