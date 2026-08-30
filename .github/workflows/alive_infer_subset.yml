@@ -1,0 +1,31 @@
+name: alive-infer-official-subset
+on:
+  push:
+    branches: [irrelevance-benchmark-ladder]
+    paths:
+      - 'research/alive_infer_subset.sh'
+      - '.github/workflows/alive_infer_subset.yml'
+  workflow_dispatch:
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clone official Alive-Infer implementation
+        run: git clone --depth 1 https://github.com/rutgers-apl/alive-nj alive-nj
+      - name: Run Python-2.7/Z3 official subset
+        env:
+          OUT: /work/alive_infer_results
+        run: |
+          cp research/alive_infer_subset.sh alive-nj/driver.sh
+          docker run --rm \
+            -e OUT=/work/alive_infer_results \
+            -v "$PWD/alive-nj:/work" \
+            -w /work \
+            python:2.7-buster bash -lc "pip install 'z3-solver==4.8.17.0' && chmod +x driver.sh infer.py && ./driver.sh"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: alive-infer-official-subset
+          path: alive-nj/alive_infer_results/
