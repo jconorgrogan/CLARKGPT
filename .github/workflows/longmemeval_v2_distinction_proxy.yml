@@ -1,0 +1,33 @@
+name: longmemeval-v2-distinction-proxy
+on:
+  push:
+    branches: [irrelevance-benchmark-ladder]
+    paths:
+      - 'research/longmemeval_v2_distinction_proxy.py'
+      - '.github/workflows/longmemeval_v2_distinction_proxy.yml'
+  workflow_dispatch:
+jobs:
+  proxy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install sparse retrieval stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install huggingface_hub hf_xet numpy pandas scipy scikit-learn
+      - name: Run official-data compression proxy
+        env:
+          HF_HUB_DISABLE_XET: '0'
+          OUT: longmemeval_proxy_results
+        run: python research/longmemeval_v2_distinction_proxy.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: longmemeval-v2-distinction-proxy
+          path: |
+            longmemeval_proxy_results/*.csv
+            longmemeval_proxy_results/*.json
