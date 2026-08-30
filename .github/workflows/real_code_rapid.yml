@@ -2,6 +2,9 @@ name: real-code-rapid-decision
 on:
   push:
     branches: [irrelevance-real-code-rapid]
+    paths:
+      - 'research/real_code_rapid_decision.py'
+      - '.github/workflows/real_code_rapid.yml'
   workflow_dispatch:
 jobs:
   benchmark:
@@ -31,8 +34,11 @@ jobs:
           HF_HUB_DISABLE_XET: '1'
           TOKENIZERS_PARALLELISM: 'false'
         run: |
+          sed -i "s/df\.transform=='r8'/df['transform']=='r8'/g" research/real_code_rapid_decision.py
+          sed -i "s/df\.transform=='base'/df['transform']=='base'/g" research/real_code_rapid_decision.py
           python research/real_code_rapid_decision.py --model '${{ matrix.model }}' --out 'rapid_${{ matrix.tag }}'
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: rapid-real-code-${{ matrix.tag }}
           path: rapid_${{ matrix.tag }}/
