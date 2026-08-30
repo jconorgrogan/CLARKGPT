@@ -1,0 +1,172 @@
+name: longmemeval-v2-fixed-reader-9b-sharded
+on:
+  push:
+    branches: [irrelevance-benchmark-ladder]
+    paths:
+      - '.github/workflows/longmemeval_fixed_reader_9b_sharded.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  shard:
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      HF_HUB_DISABLE_XET: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+      OPENAI_API_KEY: local-dummy-key
+      SHARD_INDEX: ${{ matrix.shard }}
+      NUM_SHARDS: '4'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev
+          python -m pip install --upgrade pip
+          pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install scikit-learn scipy pandas
+      - name: Clone official benchmark and install memory backend
+        run: |
+          git clone --depth 1 https://github.com/xiaowu0162/LongMemEval-V2.git lme
+          pip install -e ./lme
+          cp research/lme_fixed_reader_memory.py lme/memory_modules/distinction_tfidf.py
+          sed -i '/sublinear_tf=True/d' lme/memory_modules/distinction_tfidf.py
+          printf '\nfrom .distinction_tfidf import DistinctionTfidfMemory  # noqa: E402,F401\n' >> lme/memory_modules/memory.py
+      - name: Download official text data and create disjoint shard
+        run: |
+          python - <<'PY'
+          from huggingface_hub import snapshot_download
+          snapshot_download(
+              repo_id='xiaowu0162/longmemeval-v2',
+              repo_type='dataset',
+              local_dir='lme/data/longmemeval-v2',
+              allow_patterns=['questions.jsonl','trajectories.jsonl','haystacks/lme_v2_small.json'],
+          )
+          PY
+          python research/lme_select_fixed_reader_subset.py \
+            --data-root lme/data/longmemeval-v2 \
+            --output-root lme/subset \
+            --per-domain 12 \
+            --seed 260830
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          shard=int(os.environ['SHARD_INDEX']); total=int(os.environ['NUM_SHARDS'])
+          root=Path('lme/subset')
+          for domain in ['web','enterprise']:
+              qp=root/f'{domain}_questions.json'
+              hp=root/f'{domain}_haystack.json'
+              questions=json.loads(qp.read_text())
+              selected=questions[shard::total]
+              ids={str(q['id']) for q in selected}
+              hay=json.loads(hp.read_text())
+              qp.write_text(json.dumps(selected,indent=2))
+              hp.write_text(json.dumps({k:v for k,v in hay.items() if str(k) in ids},indent=2))
+              print(domain, [q['id'] for q in selected])
+          PY
+          mkdir -p lme/configs
+          cat > lme/configs/raw.json <<'JSON'
+          {"memory_type":"distinction_tfidf","memory_params":{"mode":"raw","chunk_chars":5000,"chunk_overlap":300,"top_k":32}}
+          JSON
+          cat > lme/configs/unique.json <<'JSON'
+          {"memory_type":"distinction_tfidf","memory_params":{"mode":"unique_lines","chunk_chars":5000,"chunk_overlap":300,"top_k":32}}
+          JSON
+      - name: Build llama.cpp
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git llama.cpp
+          cmake -S llama.cpp -B llama.cpp/build -G Ninja -DGGML_NATIVE=ON -DLLAMA_CURL=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build llama.cpp/build --target llama-server -j 4
+      - name: Start quantized Qwen3.5-9B reader
+        run: |
+          nohup ./llama.cpp/build/bin/llama-server \
+            --hf-repo ignyse/Qwen3.5-9B-Q4_K_M-GGUF \
+            --hf-file qwen3.5-9b-q4_k_m.gguf \
+            --alias Qwen/Qwen3.5-9B \
+            --host 127.0.0.1 --port 8023 \
+            --ctx-size 16384 --threads 4 --threads-batch 4 --parallel 1 \
+            --cache-type-k q8_0 --cache-type-v q8_0 --no-warmup \
+            > llama-server.log 2>&1 &
+          echo $! > llama-server.pid
+          for i in $(seq 1 180); do
+            if curl -fsS http://127.0.0.1:8023/health >/dev/null 2>&1; then exit 0; fi
+            if ! kill -0 "$(cat llama-server.pid)" 2>/dev/null; then cat llama-server.log; exit 1; fi
+            sleep 5
+          done
+          cat llama-server.log
+          exit 1
+      - name: Smoke test
+        run: |
+          curl -fsS http://127.0.0.1:8023/v1/chat/completions \
+            -H 'Content-Type: application/json' \
+            -H 'Authorization: Bearer local-dummy-key' \
+            -d '{"model":"Qwen/Qwen3.5-9B","messages":[{"role":"user","content":"Return exactly: \\boxed{ok}"}],"max_tokens":32,"temperature":0,"chat_template_kwargs":{"enable_thinking":false}}' \
+            | tee reader-smoke.json
+      - name: Run official paired harness shard
+        working-directory: lme
+        run: |
+          set -euo pipefail
+          mkdir -p fixed_reader_runs
+          for method in raw unique; do
+            for domain in web enterprise; do
+              python evaluation/harness.py \
+                --domain "$domain" \
+                --questions-path "subset/${domain}_questions.json" \
+                --haystack-path "subset/${domain}_haystack.json" \
+                --trajectories-path data/longmemeval-v2/trajectories.jsonl \
+                --memory-config-path "configs/${method}.json" \
+                --output-dir "fixed_reader_runs/${method}_${domain}" \
+                --model Qwen/Qwen3.5-9B \
+                --base-url http://127.0.0.1:8023/v1 \
+                --api-key-env OPENAI_API_KEY \
+                --memory-context-max-tokens 8000 \
+                --max-completion-tokens 384 \
+                --reader-max-concurrent-requests 1 \
+                --prompt-build-max-workers 1 \
+                --timeout-seconds 7200 \
+                --temperature 0 --top-p 1 \
+                --reader-disable-thinking
+            done
+          done
+      - name: Aggregate shard
+        working-directory: lme
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+          root=Path('fixed_reader_runs'); rows=[]
+          for method in ['raw','unique']:
+              for domain in ['web','enterprise']:
+                  run=root/f'{method}_{domain}'
+                  for r in [json.loads(x) for x in (run/'per_question.jsonl').read_text().splitlines() if x.strip()]:
+                      meta=r.get('memory_post_query_metadata') or {}
+                      rows.append({'method':method,'domain':domain,'question_id':r['question_id'],'question_type':r['question_type'],'score':float(r['score']),'memory_query_seconds':float(r['memory_query_duration_seconds']),'memory_context_tokens':int(r['memory_context_token_count']),'storage_ratio':meta.get('storage_ratio'),'response':r['response_parsed_boxed'],'gold':r['answer_gold']})
+          pq=pd.DataFrame(rows); pq.to_csv(root/'per_question_combined.csv',index=False)
+          summary=pq.groupby('method').agg(questions=('question_id','nunique'),accuracy=('score','mean'),median_memory_query_ms=('memory_query_seconds',lambda x:1000*x.median()),mean_context_tokens=('memory_context_tokens','mean'),median_storage_ratio=('storage_ratio','median')).reset_index()
+          summary.to_csv(root/'summary.csv',index=False)
+          wide=pq.pivot(index='question_id',columns='method',values='score')
+          paired={'both_correct':int(((wide.raw==1)&(wide.unique==1)).sum()),'raw_only_correct':int(((wide.raw==1)&(wide.unique==0)).sum()),'unique_only_correct':int(((wide.raw==0)&(wide.unique==1)).sum()),'both_wrong':int(((wide.raw==0)&(wide.unique==0)).sum()),'paired_questions':int(len(wide))}
+          (root/'paired.json').write_text(json.dumps(paired,indent=2))
+          print(summary.to_string(index=False)); print(json.dumps(paired,indent=2))
+          PY
+      - name: Print server log tail
+        if: always()
+        run: tail -120 llama-server.log || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: longmemeval-fixed-reader-9b-shard-${{ matrix.shard }}
+          path: |
+            lme/fixed_reader_runs/
+            lme/subset/manifest.json
+            reader-smoke.json
+            llama-server.log
