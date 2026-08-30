@@ -1,17 +1,18 @@
-name: one-pair-coloredmnist
+name: one-pair-coloredmnist-speed
 on:
   push:
-    branches: [one-pair-coloredmnist-benchmark]
+    branches: [one-pair-coloredmnist-speed]
   workflow_dispatch:
 jobs:
   benchmark:
     strategy:
       fail-fast: false
-      max-parallel: 5
+      max-parallel: 8
       matrix:
-        seed: [0, 1, 2, 3, 4]
+        seed: [0, 1, 2]
+        epochs: [1, 2, 4, 8, 18]
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,14 +23,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
           pip install numpy
-      - name: Run one-pair quotient compiler
+      - name: Run one-pair learning-curve point
         run: |
           python research/one_pair_coloredmnist.py \
             --seed ${{ matrix.seed }} \
-            --epochs 18 \
-            --batch-size 512 \
+            --epochs ${{ matrix.epochs }} \
+            --batch-size 128 \
             --out results
       - uses: actions/upload-artifact@v4
         with:
-          name: one-pair-coloredmnist-seed-${{ matrix.seed }}
+          name: one-pair-speed-e${{ matrix.epochs }}-s${{ matrix.seed }}
           path: results/
