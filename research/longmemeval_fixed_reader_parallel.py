@@ -89,8 +89,6 @@ def main() -> None:
         json.dumps([q["id"] for q in selected], indent=2)
     )
 
-    # Retrieve all contexts before reader inference. This keeps reader calls paired and
-    # prevents concurrent access to the sparse indexes from affecting timing or output.
     tasks: list[dict[str, Any]] = []
     for question_index, q in enumerate(selected, start=1):
         system_prompt = base.WEB_SYSTEM if q["domain"] == "web" else base.ENTERPRISE_SYSTEM
@@ -216,7 +214,9 @@ def main() -> None:
                 "retrieval_seconds", lambda x: 1000 * float(np.median(x))
             ),
             mean_context_chars=("context_chars", "mean"),
-            request_error_rate=("score_error", lambda x: float(np.mean(x.astype(str) != "")),
+            request_error_rate=(
+                "score_error", lambda x: float(np.mean(x.astype(str) != ""))
+            ),
         )
         .reset_index()
         .merge(storage, on="method", how="left")
