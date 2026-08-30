@@ -2,6 +2,9 @@ name: real-code-quotient-test
 on:
   push:
     branches: [irrelevance-real-code-test]
+    paths:
+      - 'research/real_code_quotient_test.py'
+      - '.github/workflows/real_code_quotient_test.yml'
   workflow_dispatch:
 jobs:
   benchmark:
@@ -31,10 +34,12 @@ jobs:
           HF_HUB_DISABLE_XET: '1'
           TOKENIZERS_PARALLELISM: 'false'
         run: |
+          sed -i 's/res\.transform==/res["transform"]==/g' research/real_code_quotient_test.py
           python research/real_code_quotient_test.py \
             --model '${{ matrix.model }}' \
             --out 'real_code_results_${{ matrix.tag }}'
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: real-code-quotient-${{ matrix.tag }}
           path: real_code_results_${{ matrix.tag }}/
