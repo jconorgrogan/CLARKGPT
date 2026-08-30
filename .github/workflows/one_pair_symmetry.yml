@@ -1,0 +1,30 @@
+name: one-pair-symmetry-benchmark
+on:
+  push:
+    branches: [one-pair-symmetry-benchmark]
+  workflow_dispatch:
+jobs:
+  benchmark:
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        seed: [0, 1, 2, 3, 4]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+          pip install numpy
+      - name: Run exact benchmark
+        run: python one_pair_fast.py --seed ${{ matrix.seed }} --epochs 18 --out results
+      - uses: actions/upload-artifact@v4
+        with:
+          name: one-pair-seed-${{ matrix.seed }}
+          path: results/
