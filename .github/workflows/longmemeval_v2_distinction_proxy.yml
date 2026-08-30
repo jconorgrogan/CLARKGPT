@@ -4,32 +4,71 @@ on:
     branches: [irrelevance-benchmark-ladder]
     paths:
       - 'research/longmemeval_v2_distinction_proxy.py'
+      - 'research/longmemeval_fixed_reader_local.py'
       - '.github/workflows/longmemeval_v2_distinction_proxy.yml'
   workflow_dispatch:
 permissions:
   contents: read
-  models: read
 jobs:
-  model_probe:
+  fixed_reader:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 180
     steps:
-      - name: Probe GitHub Models fixed reader
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python - <<'PY'
-          import json, os, urllib.request
-          payload={"model":"openai/gpt-4.1-mini","messages":[{"role":"user","content":"Return exactly OK"}],"temperature":0,"max_tokens":8}
-          req=urllib.request.Request("https://models.github.ai/inference/chat/completions",data=json.dumps(payload).encode(),headers={"Authorization":f"Bearer {os.environ['GITHUB_TOKEN']}","Content-Type":"application/json"},method="POST")
-          with urllib.request.urlopen(req,timeout=120) as r: out=r.read().decode()
-          print(out)
-          open("probe.json","w").write(out)
-          PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          name: longmemeval-reader-probe
-          path: probe.json
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libcurl4-openssl-dev
+          python -m pip install --upgrade pip
+          pip install huggingface_hub hf_xet numpy pandas scipy scikit-learn requests
+      - name: Build llama.cpp and download Qwen3.5 reader
+        env:
+          HF_HUB_DISABLE_XET: '0'
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git llama.cpp
+          cmake -S llama.cpp -B llama.cpp/build -DLLAMA_CURL=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build llama.cpp/build --config Release -j2 --target llama-server
+          huggingface-cli download ggml-org/Qwen3.5-0.8B-GGUF --include '*Q4_0.gguf' --local-dir qwen_model
+          git clone --depth 1 https://github.com/xiaowu0162/LongMemEval-V2.git lme_official
+      - name: Start local reader
+        run: |
+          MODEL_PATH=$(find qwen_model -name '*Q4_0.gguf' | head -1)
+          test -n "$MODEL_PATH"
+          nohup ./llama.cpp/build/bin/llama-server \
+            -m "$MODEL_PATH" -c 8192 -t 4 -tb 4 -b 512 -ub 128 \
+            --host 127.0.0.1 --port 8080 --parallel 1 \
+            > llama_server.log 2>&1 &
+          echo $! > llama_server.pid
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          cat llama_server.log
+          exit 1
+      - name: Run paired fixed-reader evaluation
+        env:
+          HF_HUB_DISABLE_XET: '0'
+        run: |
+          python research/longmemeval_fixed_reader_local.py \
+            --official-repo lme_official \
+            --base-url http://127.0.0.1:8080 \
+            --model Qwen3.5-0.8B-Q4_0 \
+            --limit 120 \
+            --context-chars 16000 \
+            --out longmemeval_fixed_reader_results
+      - name: Print reader log tail
+        if: always()
+        run: tail -200 llama_server.log || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: longmemeval-v2-fixed-reader
+          path: |
+            longmemeval_fixed_reader_results/
+            llama_server.log
   proxy:
     runs-on: ubuntu-latest
     timeout-minutes: 90
