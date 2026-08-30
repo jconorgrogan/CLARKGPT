@@ -1,0 +1,106 @@
+name: longmemeval-v2-blind-context-export
+on:
+  push:
+    branches: [irrelevance-benchmark-ladder]
+    paths:
+      - '.github/workflows/longmemeval_blind_context_export.yml'
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HF_HUB_DISABLE_XET: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies and official harness
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install huggingface_hub scikit-learn scipy pandas
+          git clone --depth 1 https://github.com/xiaowu0162/LongMemEval-V2.git lme
+          pip install -e ./lme
+          cp research/lme_fixed_reader_memory.py lme/memory_modules/distinction_tfidf.py
+          sed -i '/sublinear_tf=True/d' lme/memory_modules/distinction_tfidf.py
+          printf '\nfrom .distinction_tfidf import DistinctionTfidfMemory  # noqa: E402,F401\n' >> lme/memory_modules/memory.py
+      - name: Download official text data and select eight questions
+        run: |
+          python - <<'PY'
+          from huggingface_hub import snapshot_download
+          snapshot_download(
+              repo_id='xiaowu0162/longmemeval-v2',
+              repo_type='dataset',
+              local_dir='lme/data/longmemeval-v2',
+              allow_patterns=['questions.jsonl','trajectories.jsonl','haystacks/lme_v2_small.json'],
+          )
+          PY
+          python research/lme_select_fixed_reader_subset.py \
+            --data-root lme/data/longmemeval-v2 \
+            --output-root lme/subset \
+            --per-domain 4 \
+            --seed 260830
+      - name: Export blinded paired contexts
+        working-directory: lme
+        run: |
+          python - <<'PY'
+          import json, random
+          from pathlib import Path
+          from memory_modules.distinction_tfidf import DistinctionTfidfMemory
+
+          data=Path('data/longmemeval-v2')
+          trajectories={}
+          for line in (data/'trajectories.jsonl').read_text().splitlines():
+              if line.strip():
+                  row=json.loads(line); trajectories[str(row['id'])]=row
+          rng=random.Random(260830)
+          blind=[]; key=[]
+          for domain in ['web','enterprise']:
+              questions=json.loads((Path('subset')/f'{domain}_questions.json').read_text())
+              hay=json.loads((Path('subset')/f'{domain}_haystack.json').read_text())
+              for question in questions:
+                  qid=str(question['id'])
+                  contexts={}
+                  metadata={}
+                  for method,mode in [('raw','raw'),('unique','unique_lines')]:
+                      memory=DistinctionTfidfMemory({'mode':mode,'chunk_chars':5000,'chunk_overlap':300,'top_k':20})
+                      for tid in hay[qid]: memory.insert(trajectories[str(tid)])
+                      items=memory.query(question['question'])
+                      text='\n\n--- MEMORY ITEM ---\n\n'.join(str(item['value']) for item in items)
+                      contexts[method]=text[:18000]
+                      metadata[method]={
+                          'raw_characters':memory.raw_characters,
+                          'stored_characters':memory.stored_characters,
+                          'storage_ratio':memory.stored_characters/memory.raw_characters,
+                          'retrieved_characters':len(contexts[method]),
+                      }
+                  labels=['A','B']; rng.shuffle(labels)
+                  mapping={labels[0]:'raw',labels[1]:'unique'}
+                  blind.append({
+                      'question_id':qid,
+                      'domain':domain,
+                      'question_type':question['question_type'],
+                      'eval_function':question['eval_function'],
+                      'question':question['question'],
+                      'variant_A_context':contexts[mapping['A']],
+                      'variant_B_context':contexts[mapping['B']],
+                  })
+                  key.append({
+                      'question_id':qid,
+                      'mapping':mapping,
+                      'gold_answer':question['answer'],
+                      'metadata':metadata,
+                  })
+          out=Path('blind_export'); out.mkdir()
+          (out/'blind_contexts.jsonl').write_text('\n'.join(json.dumps(x) for x in blind)+'\n')
+          (out/'sealed_key.json').write_text(json.dumps(key,indent=2))
+          (out/'manifest.json').write_text(json.dumps({'questions':len(blind),'selection_seed':260830,'blinding_seed':260830,'context_char_cap':18000},indent=2))
+          print(json.dumps({'questions':len(blind)},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: longmemeval-blind-contexts
+          path: lme/blind_export/
