@@ -3,7 +3,7 @@ from pathlib import Path
 from collections import defaultdict
 import numpy as np, pandas as pd
 
-from research.real_code_quotient_test import (
+from real_code_quotient_test import (
     DATA_BASE, CPP_PARSER, _text, download, load_jsonl, sample_by_label,
     encode, normalize_rows, project, random_basis
 )
@@ -74,16 +74,13 @@ def main():
     args=ap.parse_args(); out=Path(args.out); out.mkdir(parents=True,exist_ok=True)
     train=load_jsonl(download(DATA_BASE+'/train.jsonl',out/'train.jsonl'))
     test=load_jsonl(download(DATA_BASE+'/test.jsonl',out/'test.jsonl'))
-    witnesses,_=sample_by_label(train,16,1,77)  # 16 cross-class witnesses
-    eval_rows,_=sample_by_label(test,12,20,88) # 240 held-out-class programs
+    witnesses,_=sample_by_label(train,16,1,77)
+    eval_rows,_=sample_by_label(test,12,20,88)
     wc=[r['code'] for r in witnesses]; ec=[r['code'] for r in eval_rows]; labels=[str(r['label']) for r in eval_rows]
-
-    # Witnesses use the hardest 8-variable rename. Evaluation uses independent 1/4/8 renames.
     wren=[rename_n_locals(c,1000+i,8) for i,c in enumerate(wc)]
     banks={'base':ec}
     for n in [1,4,8]: banks[f'rename_{n}']=[rename_n_locals(c,2000+i,n) for i,c in enumerate(ec)]
     diag={k:float(np.mean([a!=b for a,b in zip(ec,v)])) for k,v in banks.items() if k!='base'}
-
     all_codes=wc+wren
     spans={'wbase':(0,len(wc)),'wren':(len(wc),2*len(wc))}; pos=2*len(wc)
     for k,v in banks.items(): spans[k]=(pos,pos+len(v)); all_codes+=v; pos+=len(v)
@@ -95,7 +92,6 @@ def main():
         u,s,vt=np.linalg.svd(D,full_matrices=False)
         cum=np.cumsum(s*s)/(np.sum(s*s)+1e-12); rank=int(np.searchsorted(cum,.9)+1)
         rank=max(1,min(rank,32,vt.shape[0])); U=vt[:rank].T; Ur=random_basis(base.shape[1],rank,500+K)
-        # Same-budget ridge map.
         X=E['wren'][:K]; Y=E['wbase'][:K]
         A=X.T@np.linalg.solve(X@X.T+1.0*np.eye(K),Y)
         methods={
