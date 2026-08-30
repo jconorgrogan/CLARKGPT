@@ -34,10 +34,12 @@ jobs:
           HF_HUB_DISABLE_XET: '1'
           TOKENIZERS_PARALLELISM: 'false'
         run: |
+          sed -i "s/df\.transform=='rename_8'/df['transform']=='rename_8'/g" research/real_code_rename_retention.py
           python research/real_code_rename_retention.py \
             --model '${{ matrix.model }}' \
             --out 'rename_results_${{ matrix.tag }}'
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: real-code-rename-${{ matrix.tag }}
           path: rename_results_${{ matrix.tag }}/
