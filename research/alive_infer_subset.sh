@@ -4,18 +4,18 @@ OUT=${OUT:-alive_infer_results}
 mkdir -p "$OUT/logs"
 echo 'file,mode,exit_code,seconds,precondition_lines,valid_lines,output_bytes' > "$OUT/runs.csv"
 
-mapfile -t FILES < <(find tests/infer/souper_tests -name '*.opt' | sort -V | head -n 24)
-for mode in default no_features pre_features; do
+# Eight official Souper cases and two ablations give a bounded, protocol-faithful screen.
+mapfile -t FILES < <(find tests/infer/souper_tests -name '*.opt' | sort -V | head -n 8)
+for mode in default no_features; do
   case "$mode" in
     default) FLAGS="--incompletes" ;;
     no_features) FLAGS="--incompletes --no-features" ;;
-    pre_features) FLAGS="--incompletes --pre-features" ;;
   esac
   for file in "${FILES[@]}"; do
     base=$(basename "$file" .opt)
     log="$OUT/logs/${base}_${mode}.txt"
     start=$(date +%s)
-    timeout 90s ./infer.py $FLAGS "$file" > "$log" 2>&1
+    timeout 30s ./infer.py $FLAGS "$file" > "$log" 2>&1
     code=$?
     end=$(date +%s)
     secs=$((end-start))
@@ -27,19 +27,19 @@ for mode in default no_features pre_features; do
 done
 python - <<'PY'
 import csv, json, os
-from collections import defaultdict
 out=os.environ.get('OUT','alive_infer_results')
 rows=list(csv.DictReader(open(out+'/runs.csv')))
 summary=[]
 for mode in sorted(set(r['mode'] for r in rows)):
     rr=[r for r in rows if r['mode']==mode]
+    seconds=sorted(int(r['seconds']) for r in rr)
     summary.append({
         'mode':mode,
         'files':len(rr),
         'completed_rate':sum(int(r['exit_code'])==0 for r in rr)/float(len(rr)),
         'timeout_rate':sum(int(r['exit_code'])==124 for r in rr)/float(len(rr)),
         'precondition_output_rate':sum(int(r['precondition_lines'])>0 for r in rr)/float(len(rr)),
-        'median_seconds':sorted(int(r['seconds']) for r in rr)[len(rr)//2],
+        'median_seconds':seconds[len(seconds)//2],
     })
 with open(out+'/summary.json','w') as f: json.dump(summary,f,indent=2)
 with open(out+'/summary.csv','w') as f:
