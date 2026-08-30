@@ -1,0 +1,34 @@
+name: one-pair-coloredmnist-lenet
+on:
+  push:
+    branches: [one-pair-coloredmnist-lenet]
+  workflow_dispatch:
+jobs:
+  benchmark:
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        seed: [0, 1, 2, 3, 4]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+          pip install numpy
+      - name: Run small-model benchmark
+        run: |
+          python research/one_pair_fastlenet.py \
+            --seed ${{ matrix.seed }} \
+            --epochs 12 \
+            --out results
+      - uses: actions/upload-artifact@v4
+        with:
+          name: one-pair-lenet-seed-${{ matrix.seed }}
+          path: results/
