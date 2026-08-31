@@ -38,7 +38,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev
           python -m pip install --upgrade pip
-          pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cpu
           pip install huggingface_hub hf_xet scikit-learn scipy pandas
 
       - name: Install official harness and memory backend
