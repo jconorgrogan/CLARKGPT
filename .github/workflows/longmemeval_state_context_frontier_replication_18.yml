@@ -1,0 +1,305 @@
+name: longmemeval-v2-state-quotient-context-frontier-replication-18
+
+on:
+  push:
+    branches: [irrelevance-benchmark-ladder]
+    paths:
+      - '.github/workflows/longmemeval_state_context_frontier_replication_18.yml'
+  workflow_dispatch:
+
+jobs:
+  score:
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        domain: [web, enterprise]
+        shard: [0, 1, 2]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      HF_HUB_DISABLE_XET: '0'
+      TOKENIZERS_PARALLELISM: 'false'
+      OPENAI_API_KEY: local-dummy-key
+      DOMAIN: ${{ matrix.domain }}
+      SHARD: ${{ matrix.shard }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev
+          python -m pip install --upgrade pip
+          pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install huggingface_hub hf_xet scikit-learn scipy pandas
+
+      - name: Install official harness and frozen state quotient
+        run: |
+          git clone --depth 1 https://github.com/xiaowu0162/LongMemEval-V2.git lme
+          pip install -e ./lme
+          cp research/lme_incidence_memory.py lme/memory_modules/distinction_graph.py
+          printf '\nfrom .distinction_graph import DistinctionGraphMemory  # noqa: E402,F401\n' >> lme/memory_modules/memory.py
+          python research/lme_patch_mc_reader.py lme/evaluation/harness.py
+
+          # Symmetry-match the flat raw retriever: score the question stem and
+          # every answer option separately using the same aggregation rule as
+          # the quotient retriever. This patch affects only the workflow copy.
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('lme/memory_modules/distinction_graph.py')
+          text = path.read_text(encoding='utf-8')
+          query_start = text.index('    def query(', text.index('class DistinctionGraphMemory'))
+          raw_start = text.index('        if self.mode == "raw":\n', query_start)
+          state_start = text.index('        if self.state_matrix is None', raw_start)
+          replacement = (
+              '        if self.mode == "raw":\n'
+              '            if self.raw_matrix is None or not self.raw_texts:\n'
+              '                return []\n'
+              '            stem, options = self._query_variants(query)\n'
+              '            variants = [stem] + options if options else [query]\n'
+              '            query_matrix = self.vectorizer.transform(variants)\n'
+              '            scores_all = (self.raw_matrix @ query_matrix.T).toarray()\n'
+              '            scores = self._priority(scores_all)\n'
+              '            order = np.argsort(-scores, kind="stable")[: self.top_k]\n'
+              '            return [\n'
+              '                {"type": "text", "value": self.raw_texts[int(index)]}\n'
+              '                for index in order\n'
+              '                if self.raw_texts[int(index)].strip()\n'
+              '            ]\n'
+          )
+          text = text[:raw_start] + replacement + text[state_start:]
+          path.write_text(text, encoding='utf-8')
+          PY
+          python -m py_compile lme/memory_modules/distinction_graph.py
+
+      - name: Prepare frozen 18-question replication shard
+        run: |
+          python - <<'PY'
+          from huggingface_hub import snapshot_download
+          snapshot_download(
+              repo_id='xiaowu0162/longmemeval-v2',
+              repo_type='dataset',
+              local_dir='lme/data/longmemeval-v2',
+              allow_patterns=['questions.jsonl','trajectories.jsonl','haystacks/lme_v2_small.json'],
+          )
+          PY
+          python research/lme_select_mc_holdout.py \
+            --data-root lme/data/longmemeval-v2 \
+            --output-root lme/subset_full \
+            --per-domain 9 \
+            --holdout-seed 260833
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          domain = os.environ['DOMAIN']
+          shard = int(os.environ['SHARD'])
+          root = Path('lme/subset_full')
+          questions = json.loads((root / f'{domain}_questions.json').read_text())
+          haystack = json.loads((root / f'{domain}_haystack.json').read_text())
+          start = shard * 3
+          selected = questions[start:start + 3]
+          if len(selected) != 3:
+              raise SystemExit(f'Expected three replication questions, found {len(selected)}')
+
+          out = Path('lme/subset_current')
+          out.mkdir(parents=True, exist_ok=True)
+          (out / 'questions.json').write_text(json.dumps(selected, indent=2) + '\n')
+          (out / 'haystack.json').write_text(
+              json.dumps({str(row['id']): haystack[str(row['id'])] for row in selected}, indent=2) + '\n'
+          )
+          full_manifest = json.loads((root / 'manifest.json').read_text())
+          preregistration = {
+              'experiment': 'state-quotient-context-frontier-replication-18-v1',
+              'role': 'secondary replication and pooled precision extension',
+              'architecture_frozen_from_incidence-heldout-mc-18-v1': True,
+              'known_prior_result': 'state4k 6/18 versus legacy raw4k 5/18',
+              'new_tests_frozen_before_scoring': [
+                  'option-aware raw baseline',
+                  'raw2k',
+                  'state2k',
+                  'state1k',
+              ],
+              'primary_comparison': 'state2k versus option-aware raw4k',
+              'primary_success_rule': (
+                  'state2k exact accuracy >= raw4k exact accuracy, '
+                  'storage_ratio <= 0.10, and mean reader context <= 0.60 of raw4k'
+              ),
+              'arms': {
+                  'raw4k': {'mode': 'raw', 'context_tokens': 4000},
+                  'raw2k': {'mode': 'raw', 'context_tokens': 2000},
+                  'state4k': {'mode': 'state_bundle', 'context_tokens': 4000},
+                  'state2k': {'mode': 'state_bundle', 'context_tokens': 2000},
+                  'state1k': {'mode': 'state_bundle', 'context_tokens': 1000},
+              },
+              'domain': domain,
+              'shard': shard,
+              'question_ids': [str(row['id']) for row in selected],
+              'question_types': [str(row['question_type']) for row in selected],
+              'development_overlap_count': 0,
+              'selection_manifest': full_manifest['domains'][domain],
+              'reader': 'Qwen/Qwen3.5-9B Q4_K_M',
+              'completion_tokens': 32,
+              'temperature': 0,
+          }
+          (out / 'manifest.json').write_text(json.dumps(preregistration, indent=2) + '\n')
+          print(json.dumps(preregistration, indent=2))
+          PY
+
+      - name: Build reader and fetch Qwen3.5-9B Q4_K_M
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git llama.cpp
+          cmake -S llama.cpp -B llama.cpp/build -G Ninja -DGGML_NATIVE=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build llama.cpp/build --target llama-server -j 4
+          hf download tinnlab/Qwen3.5-9B-GGUF Qwen3.5-9B-Q4_K_M.gguf --local-dir qwen9b
+
+      - name: Start deterministic non-thinking reader
+        run: |
+          nohup ./llama.cpp/build/bin/llama-server \
+            -m qwen9b/Qwen3.5-9B-Q4_K_M.gguf \
+            --alias Qwen/Qwen3.5-9B \
+            --host 127.0.0.1 --port 8023 \
+            --ctx-size 8192 --threads 4 --threads-batch 4 --parallel 1 \
+            --cache-type-k q8_0 --cache-type-v q8_0 \
+            --reasoning off --chat-template-kwargs '{"enable_thinking":false}' \
+            --no-warmup > llama-server.log 2>&1 &
+          echo $! > llama-server.pid
+          for i in $(seq 1 180); do
+            if curl -fsS http://127.0.0.1:8023/health >/dev/null 2>&1; then exit 0; fi
+            if ! kill -0 "$(cat llama-server.pid)" 2>/dev/null; then cat llama-server.log; exit 1; fi
+            sleep 3
+          done
+          cat llama-server.log
+          exit 1
+
+      - name: Run five-arm context frontier
+        working-directory: lme
+        run: |
+          set -euo pipefail
+          for ARM in raw4k raw2k state4k state2k state1k; do
+            case "$ARM" in
+              raw4k) MODE=raw; BUDGET=4000 ;;
+              raw2k) MODE=raw; BUDGET=2000 ;;
+              state4k) MODE=state_bundle; BUDGET=4000 ;;
+              state2k) MODE=state_bundle; BUDGET=2000 ;;
+              state1k) MODE=state_bundle; BUDGET=1000 ;;
+              *) exit 2 ;;
+            esac
+            mkdir -p configs
+            cat > configs/current.json <<JSON
+          {"memory_type":"distinction_graph","memory_params":{"mode":"$MODE","chunk_chars":5000,"chunk_overlap":300,"top_k":20,"render_chars":1450,"max_facts_per_bundle":48}}
+          JSON
+            python evaluation/harness.py \
+              --domain "$DOMAIN" \
+              --questions-path subset_current/questions.json \
+              --haystack-path subset_current/haystack.json \
+              --trajectories-path data/longmemeval-v2/trajectories.jsonl \
+              --memory-config-path configs/current.json \
+              --output-dir "frontier_${ARM}_${DOMAIN}_${SHARD}" \
+              --model Qwen/Qwen3.5-9B \
+              --base-url http://127.0.0.1:8023/v1 \
+              --api-key-env OPENAI_API_KEY \
+              --memory-context-max-tokens "$BUDGET" \
+              --max-completion-tokens 32 \
+              --reader-max-concurrent-requests 1 \
+              --prompt-build-max-workers 1 \
+              --timeout-seconds 3600 \
+              --temperature 0 --top-p 1 \
+              --reader-disable-thinking
+          done
+
+      - name: Extract and validate all arms
+        working-directory: lme
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import pandas as pd
+
+          domain = os.environ['DOMAIN']
+          shard = os.environ['SHARD']
+          arms = {
+              'raw4k': 4000,
+              'raw2k': 2000,
+              'state4k': 4000,
+              'state2k': 2000,
+              'state1k': 1000,
+          }
+          rows = []
+          for arm, budget in arms.items():
+              run = Path(f'frontier_{arm}_{domain}_{shard}')
+              records = [
+                  json.loads(line)
+                  for line in (run / 'per_question.jsonl').read_text().splitlines()
+                  if line.strip()
+              ]
+              if len(records) != 3:
+                  raise SystemExit(f'{arm}: expected three records, found {len(records)}')
+              for record in records:
+                  meta = record.get('memory_post_query_metadata') or {}
+                  usage = record.get('usage') or {}
+                  response = str(record['response_parsed_boxed']).strip().upper()
+                  rows.append({
+                      'experiment': 'state-quotient-context-frontier-replication-18-v1',
+                      'arm': arm,
+                      'mode': meta.get('mode'),
+                      'context_budget': budget,
+                      'domain': domain,
+                      'shard': int(shard),
+                      'question_id': str(record['question_id']),
+                      'question_type': record['question_type'],
+                      'score': float(record['score']),
+                      'score_bool': bool(record['score_bool']),
+                      'valid_choice': response in set('ABCDEFGH'),
+                      'memory_query_seconds': float(record['memory_query_duration_seconds']),
+                      'memory_context_tokens': int(record['memory_context_token_count']),
+                      'raw_characters': meta.get('raw_characters'),
+                      'stored_characters': meta.get('stored_characters'),
+                      'storage_ratio': meta.get('storage_ratio'),
+                      'state_count': meta.get('state_count'),
+                      'unique_fact_count': meta.get('unique_fact_count'),
+                      'incidence_edges': meta.get('incidence_edges'),
+                      'returned_items': meta.get('returned_items'),
+                      'completion_tokens': int(usage.get('completion_tokens') or 0),
+                      'hit_completion_cap': int(usage.get('completion_tokens') or 0) >= 32,
+                      'response': response,
+                      'response_raw': record['response_raw'],
+                      'gold': str(record['answer_gold']).strip().upper(),
+                  })
+          frame = pd.DataFrame(rows)
+          if len(frame) != 15:
+              raise SystemExit(f'Expected 15 rows, found {len(frame)}')
+          if not frame['valid_choice'].all():
+              raise SystemExit('Grammar violation')
+          if frame.groupby('arm')['question_id'].nunique().ne(3).any():
+              raise SystemExit('Arm pairing failure')
+          if frame.pivot(index='question_id', columns='arm', values='gold').nunique(axis=1).ne(1).any():
+              raise SystemExit('Gold mismatch across arms')
+          frame.to_csv('frontier_compact.csv', index=False)
+          print(frame.to_string(index=False))
+          PY
+
+      - name: Print reader tail
+        if: always()
+        run: tail -120 llama-server.log || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: state-context-frontier-replication-${{ matrix.domain }}-${{ matrix.shard }}
+          path: |
+            lme/frontier_compact.csv
+            lme/subset_current/manifest.json
+            lme/frontier_*_enterprise_${{ matrix.shard }}/aggregated_metrics.json
+            lme/frontier_*_enterprise_${{ matrix.shard }}/per_question.jsonl
+            lme/frontier_*_enterprise_${{ matrix.shard }}/prompt_rows.jsonl
+            lme/frontier_*_enterprise_${{ matrix.shard }}/prompt_build_summary.json
+            llama-server.log
