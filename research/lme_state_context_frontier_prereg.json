@@ -1,0 +1,38 @@
+{
+  "experiment": "state-quotient-context-frontier-enterprise-9-v1",
+  "timestamp_context": "committed before opening any scores from incidence-enterprise-extension-9-v1",
+  "architecture": "frozen state_bundle implementation from incidence-heldout-mc-18-v1",
+  "question_set": "the final nine eligible enterprise multiple-choice questions after exact exclusion of the 15 development questions and the first nine enterprise holdout questions",
+  "selection_seed": 260835,
+  "reader": "Qwen/Qwen3.5-9B Q4_K_M, deterministic, reasoning off",
+  "completion_tokens": 32,
+  "arms": {
+    "raw4k": {"mode": "raw", "context_tokens": 4000, "option_aware": true},
+    "raw2k": {"mode": "raw", "context_tokens": 2000, "option_aware": true},
+    "state4k": {"mode": "state_bundle", "context_tokens": 4000},
+    "state2k": {"mode": "state_bundle", "context_tokens": 2000},
+    "state1k": {"mode": "state_bundle", "context_tokens": 1000}
+  },
+  "primary_comparison": "state2k versus raw4k",
+  "primary_success_rule": "state2k exact accuracy is at least raw4k exact accuracy; state storage ratio is at most 0.10; mean state2k reader context is at most 0.60 times mean raw4k reader context",
+  "strong_attention_rule": "state1k exact accuracy is at least raw4k exact accuracy, or state2k exact accuracy exceeds raw4k exact accuracy",
+  "secondary_comparisons": [
+    "state4k versus raw4k",
+    "state2k versus raw2k",
+    "state1k versus raw4k"
+  ],
+  "analysis": [
+    "paired question-level wins and losses",
+    "paired exact McNemar tests",
+    "paired bootstrap confidence intervals",
+    "logical storage ratio",
+    "actual reader-context token ratio",
+    "retrieval latency"
+  ],
+  "integrity_requirements": [
+    "all arms use identical question IDs and gold answers",
+    "all outputs are valid A-H choices",
+    "zero overlap with development and first holdout question IDs",
+    "same model, prompt, completion budget, and generation settings across arms"
+  ]
+}
