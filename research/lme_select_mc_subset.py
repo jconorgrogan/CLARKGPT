@@ -57,6 +57,7 @@ def main() -> None:
         groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in eligible:
             groups[str(row.get("question_type"))].append(row)
+        initial_group_counts = {name: len(values) for name, values in groups.items()}
         for values in groups.values():
             rng.shuffle(values)
 
@@ -73,7 +74,7 @@ def main() -> None:
         if len(selected) < args.per_domain:
             raise RuntimeError(
                 f"Only selected {len(selected)} eligible multiple-choice {domain} questions; "
-                f"eligible_by_type={ {name: len(values) for name, values in groups.items()} }"
+                f"eligible_by_type={initial_group_counts}"
             )
 
         (output_root / f"{domain}_questions.json").write_text(
@@ -85,10 +86,11 @@ def main() -> None:
         )
         manifest["domains"][domain] = {
             "eligible_count": len(eligible),
+            "eligible_by_type": initial_group_counts,
             "selected_count": len(selected),
             "question_ids": [row["id"] for row in selected],
             "question_types": [row["question_type"] for row in selected],
-            "gold_letters_sha_input": [str(row["answer"]).strip().upper() for row in selected],
+            "option_letters": [sorted(set(OPTION_RE.findall(str(row["question"])))) for row in selected],
             "haystack_sizes": [len(haystacks[str(row["id"])]) for row in selected],
         }
 
