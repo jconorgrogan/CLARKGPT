@@ -1,0 +1,59 @@
+name: longmemeval-v2-fixed-reader-publish
+on:
+  push:
+    branches: [irrelevance-benchmark-ladder]
+    paths:
+      - '.github/workflows/longmemeval_fixed_reader_publish.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+  models: read
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irrelevance-benchmark-ladder
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Clone official benchmark
+        run: git clone --depth 1 https://github.com/xiaowu0162/LongMemEval-V2.git official_longmemeval_v2
+      - name: Install evaluation stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy pandas scipy scikit-learn huggingface_hub requests
+          pip install openai anthropic google-genai litellm rapidfuzz python-dateutil dateparser rouge-score nltk
+      - name: Run paired fixed-reader pilot
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HF_HUB_DISABLE_XET: '1'
+          TOKENIZERS_PARALLELISM: 'false'
+        run: |
+          python research/longmemeval_fixed_reader_pilot.py \
+            --official-repo official_longmemeval_v2 \
+            --out longmemeval_fixed_reader_results \
+            --questions 30 \
+            --context-chars 8000 \
+            --model openai/gpt-4.1-mini
+      - name: Publish result snapshot to branch
+        if: always()
+        run: |
+          mkdir -p research_results/longmemeval_fixed_reader
+          cp -f longmemeval_fixed_reader_results/status.json research_results/longmemeval_fixed_reader/ 2>/dev/null || true
+          cp -f longmemeval_fixed_reader_results/summary.csv research_results/longmemeval_fixed_reader/ 2>/dev/null || true
+          cp -f longmemeval_fixed_reader_results/paired_bootstrap.json research_results/longmemeval_fixed_reader/ 2>/dev/null || true
+          cp -f longmemeval_fixed_reader_results/REPORT.md research_results/longmemeval_fixed_reader/ 2>/dev/null || true
+          cp -f longmemeval_fixed_reader_results/runs.csv research_results/longmemeval_fixed_reader/ 2>/dev/null || true
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add research_results/longmemeval_fixed_reader
+          git commit -m 'Publish LongMemEval fixed-reader pilot results' || exit 0
+          git push origin HEAD:irrelevance-benchmark-ladder
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: longmemeval-v2-fixed-reader-publish
+          path: longmemeval_fixed_reader_results/
