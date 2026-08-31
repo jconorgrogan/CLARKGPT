@@ -53,36 +53,27 @@ jobs:
 
           path = Path('lme/memory_modules/distinction_graph.py')
           text = path.read_text(encoding='utf-8')
-          old = '''        if self.mode == "raw":
-              if self.raw_matrix is None or not self.raw_texts:
-                  return []
-              query_vector = self.vectorizer.transform([query])
-              scores = (self.raw_matrix @ query_vector.T).toarray().ravel()
-              order = np.argsort(-scores, kind="stable")[: self.top_k]
-              return [
-                  {"type": "text", "value": self.raw_texts[int(index)]}
-                  for index in order
-                  if self.raw_texts[int(index)].strip()
-              ]
-          '''
-          new = '''        if self.mode == "raw":
-              if self.raw_matrix is None or not self.raw_texts:
-                  return []
-              stem, options = self._query_variants(query)
-              variants = [stem] + options if options else [query]
-              query_matrix = self.vectorizer.transform(variants)
-              scores_all = (self.raw_matrix @ query_matrix.T).toarray()
-              scores = self._priority(scores_all)
-              order = np.argsort(-scores, kind="stable")[: self.top_k]
-              return [
-                  {"type": "text", "value": self.raw_texts[int(index)]}
-                  for index in order
-                  if self.raw_texts[int(index)].strip()
-              ]
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f'Expected one raw-query block, found {text.count(old)}')
-          path.write_text(text.replace(old, new), encoding='utf-8')
+          query_start = text.index('    def query(', text.index('class DistinctionGraphMemory'))
+          raw_start = text.index('        if self.mode == "raw":\n', query_start)
+          state_start = text.index('        if self.state_matrix is None', raw_start)
+          replacement = (
+              '        if self.mode == "raw":\n'
+              '            if self.raw_matrix is None or not self.raw_texts:\n'
+              '                return []\n'
+              '            stem, options = self._query_variants(query)\n'
+              '            variants = [stem] + options if options else [query]\n'
+              '            query_matrix = self.vectorizer.transform(variants)\n'
+              '            scores_all = (self.raw_matrix @ query_matrix.T).toarray()\n'
+              '            scores = self._priority(scores_all)\n'
+              '            order = np.argsort(-scores, kind="stable")[: self.top_k]\n'
+              '            return [\n'
+              '                {"type": "text", "value": self.raw_texts[int(index)]}\n'
+              '                for index in order\n'
+              '                if self.raw_texts[int(index)].strip()\n'
+              '            ]\n'
+          )
+          text = text[:raw_start] + replacement + text[state_start:]
+          path.write_text(text, encoding='utf-8')
           PY
           python -m py_compile lme/memory_modules/distinction_graph.py
 
