@@ -10,6 +10,18 @@ from typing import Any
 
 OPTION_RE = re.compile(r"(?m)^\s*([A-H])\.\s+\S")
 VALID_ANSWERS = set("ABCDEFGH")
+DEVELOPMENT_IDS = {
+    "web": {
+        "06e965cf", "07fff330", "1defc293", "1e011eb5", "23aecb38",
+        "30fab98c", "674a6972", "91d0775e", "b828a6b2", "be541aa6",
+        "c39f6edf", "c56e69ca", "c738b934", "c7e367e2", "dae9f7e9",
+    },
+    "enterprise": {
+        "100ff132", "233f9f09", "4dffe641", "5edd2533", "78686f4e",
+        "7e32e4a2", "7ea13f14", "9e05978c", "b8cabd09", "bdb825a3",
+        "bfb3bcc4", "d63e8a7f", "e033e796", "e334d5c6", "f9c65fe6",
+    },
+}
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -62,7 +74,6 @@ def main() -> None:
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--per-domain", type=int, default=15)
-    parser.add_argument("--development-seed", type=int, default=260832)
     parser.add_argument("--holdout-seed", type=int, default=260833)
     args = parser.parse_args()
 
@@ -74,18 +85,22 @@ def main() -> None:
 
     manifest: dict[str, Any] = {
         "experiment": "incidence-heldout-mc-30-v1",
-        "development_seed": args.development_seed,
+        "development_experiment": "anchored-mc-30-v1",
         "holdout_seed": args.holdout_seed,
-        "selection_rule": "balanced text-only deterministic MC; exclude all anchored-mc-30-v1 development IDs",
+        "selection_rule": "balanced text-only deterministic MC; exact exclusion of all 30 prior development IDs",
         "domains": {},
     }
     for offset, domain in enumerate(("web", "enterprise")):
         eligible = eligible_rows(questions, haystacks, domain)
-        development = balanced_select(eligible, args.per_domain, args.development_seed + offset)
-        excluded = {str(row["id"]) for row in development}
+        eligible_ids = {str(row["id"]) for row in eligible}
+        excluded = DEVELOPMENT_IDS[domain]
+        missing_excluded = excluded - eligible_ids
+        if missing_excluded:
+            raise RuntimeError(f"Recorded development IDs missing from eligible {domain} pool: {sorted(missing_excluded)}")
         remaining = [row for row in eligible if str(row["id"]) not in excluded]
         heldout = balanced_select(remaining, args.per_domain, args.holdout_seed + offset)
-        overlap = excluded & {str(row["id"]) for row in heldout}
+        heldout_ids = {str(row["id"]) for row in heldout}
+        overlap = excluded & heldout_ids
         if overlap:
             raise RuntimeError(f"Development/holdout overlap: {sorted(overlap)}")
 
