@@ -1,0 +1,46 @@
+name: longmemeval-v2-composition-proxy
+
+on:
+  push:
+    branches: [irrelevance-benchmark-ladder]
+    paths:
+      - 'research/lme_composition_proxy.py'
+      - '.github/workflows/longmemeval_composition_proxy.yml'
+  workflow_dispatch:
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HF_HUB_DISABLE_XET: '0'
+      TOKENIZERS_PARALLELISM: 'false'
+      OUT: longmemeval_composition_proxy_results
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install huggingface_hub hf_xet numpy pandas scipy scikit-learn
+      - name: Run composition-preserving compression proxy
+        run: python research/lme_composition_proxy.py
+      - name: Print headline
+        if: always()
+        run: |
+          cat longmemeval_composition_proxy_results/metadata.json || true
+          cat longmemeval_composition_proxy_results/summary.csv || true
+          cat longmemeval_composition_proxy_results/paired_vs_raw.csv || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: longmemeval-composition-proxy
+          path: |
+            longmemeval_composition_proxy_results/metadata.json
+            longmemeval_composition_proxy_results/storage.csv
+            longmemeval_composition_proxy_results/runs.csv
+            longmemeval_composition_proxy_results/summary.csv
+            longmemeval_composition_proxy_results/paired_vs_raw.csv
+            longmemeval_composition_proxy_results/by_question_type_16k.csv
