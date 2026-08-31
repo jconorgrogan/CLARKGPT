@@ -1,0 +1,44 @@
+name: longmemeval-v2-fixed-reader-pilot
+on:
+  push:
+    branches: [irrelevance-benchmark-ladder]
+    paths:
+      - 'research/longmemeval_fixed_reader_pilot.py'
+      - '.github/workflows/longmemeval_fixed_reader_pilot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  models: read
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Clone official benchmark
+        run: git clone --depth 1 https://github.com/xiaowu0162/LongMemEval-V2.git official_longmemeval_v2
+      - name: Install evaluation stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy pandas scipy scikit-learn huggingface_hub requests
+          pip install openai anthropic google-genai litellm rapidfuzz python-dateutil dateparser rouge-score nltk
+      - name: Run paired fixed-reader pilot
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HF_HUB_DISABLE_XET: '1'
+          TOKENIZERS_PARALLELISM: 'false'
+        run: |
+          python research/longmemeval_fixed_reader_pilot.py \
+            --official-repo official_longmemeval_v2 \
+            --out longmemeval_fixed_reader_results \
+            --questions 30 \
+            --context-chars 8000 \
+            --model openai/gpt-4.1-mini
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: longmemeval-v2-fixed-reader-pilot
+          path: longmemeval_fixed_reader_results/
