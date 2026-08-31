@@ -5,6 +5,8 @@ on:
     branches: [irrelevance-benchmark-ladder]
     paths:
       - '.github/workflows/longmemeval_anchored_forced_30.yml'
+      - 'research/lme_patch_forced_reader.py'
+      - 'research/lme_anchored_memory.py'
   workflow_dispatch:
 
 jobs:
