@@ -1,0 +1,6 @@
+{
+  "status": "blocked",
+  "reason": "No completed reader calls",
+  "eligible_questions": 0,
+  "completed_calls": 0
+}
