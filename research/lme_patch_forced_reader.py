@@ -25,7 +25,7 @@ def patch_harness(path: Path) -> None:
     )
     text = replace_exact(
         text,
-        'If you do not know the answer, output exactly \\boxed{UNKNOWN}. ',
+        r'If you do not know the answer, output exactly \\boxed{UNKNOWN}. ',
         'Select the best-supported answer even when the evidence is incomplete. ',
         label="reader abstention instruction",
         expected=2,
