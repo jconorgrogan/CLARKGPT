@@ -50,26 +50,92 @@ jobs:
           printf '\nfrom .distinction_tfidf import DistinctionTfidfMemory  # noqa: E402,F401\n' >> lme/memory_modules/memory.py
           python - <<'PY'
           from pathlib import Path
+
           path = Path('lme/evaluation/harness.py')
           text = path.read_text(encoding='utf-8')
+
           needle = 'Answer based on your memory of the environment. '
           replacement = (
               'Answer based on your memory of the environment. '
-              'Respond with exactly one line in the form \\\\boxed{...}; '
-              'place only the final answer inside the box. '
+              'Give the shortest supported final answer. '
           )
           count = text.count(needle)
           if count != 2:
               raise SystemExit(f'Expected two reader-prompt occurrences, found {count}')
-          path.write_text(text.replace(needle, replacement), encoding='utf-8')
+          text = text.replace(needle, replacement)
+
+          old_question = '    question_block = f"\\n\\n### Question to answer:\\n{question_text}"\n'
+          new_question = (
+              '    question_block = (\n'
+              '        f"\\n\\n### Question to answer:\\n{question_text}"\n'
+              '        "\\n\\n### Required response:\\nReturn one JSON object with one field named answer. "\n'
+              '        "Put only the final benchmark answer in that field."\n'
+              '    )\n'
+          )
+          if text.count(old_question) != 1:
+              raise SystemExit('Could not locate question_block construction')
+          text = text.replace(old_question, new_question)
+
+          old_request = '''    req: dict[str, Any] = {
+        "model": args.model,
+        "messages": messages,
+        "timeout": args.timeout_seconds,
+    }
+'''
+          new_request = '''    req: dict[str, Any] = {
+        "model": args.model,
+        "messages": messages,
+        "timeout": args.timeout_seconds,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "final_answer",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "answer": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 160,
+                        }
+                    },
+                    "required": ["answer"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+    }
+'''
+          if text.count(old_request) != 1:
+              raise SystemExit('Could not locate reader request construction')
+          text = text.replace(old_request, new_request)
+
+          old_parser = '        parsed_answer = extract_boxed_answer(response_raw)\n'
+          new_parser = '''        try:
+            structured = json.loads(response_raw)
+            answer_field = structured.get("answer", "") if isinstance(structured, dict) else structured
+            parsed_answer = str(answer_field).strip()
+            boxed_answer = extract_boxed_answer(parsed_answer)
+            if boxed_answer:
+                parsed_answer = boxed_answer
+        except Exception:
+            parsed_answer = extract_boxed_answer(response_raw)
+'''
+          if text.count(old_parser) != 1:
+              raise SystemExit('Could not locate boxed-answer parser')
+          text = text.replace(old_parser, new_parser)
+
+          path.write_text(text, encoding='utf-8')
           PY
           cat > lme/reader_patch.json <<'JSON'
           {
             "reader": "Qwen/Qwen3.5-9B Q4_K_M",
             "reasoning": "off",
-            "completion_token_cap": 384,
-            "prompt_adaptation": "exactly one boxed final-answer line",
-            "purpose": "prevent truncation before the benchmark boxed-answer parser"
+            "completion_token_cap": 192,
+            "format_adapter": "llama.cpp strict JSON schema",
+            "schema": {"type": "object", "properties": {"answer": {"type": "string", "maxLength": 160}}, "required": ["answer"], "additionalProperties": false},
+            "purpose": "deliver one short final answer to the official deterministic scorer"
           }
           JSON
 
@@ -135,7 +201,7 @@ jobs:
             --base-url http://127.0.0.1:8023/v1 \
             --api-key-env OPENAI_API_KEY \
             --memory-context-max-tokens 4000 \
-            --max-completion-tokens 384 \
+            --max-completion-tokens 192 \
             --reader-max-concurrent-requests 1 \
             --prompt-build-max-workers 1 \
             --timeout-seconds 3600 \
@@ -169,7 +235,7 @@ jobs:
                   'stored_characters':meta.get('stored_characters'),
                   'storage_ratio':meta.get('storage_ratio'),
                   'completion_tokens':completion_tokens,
-                  'hit_completion_cap':completion_tokens >= 384,
+                  'hit_completion_cap':completion_tokens >= 192,
                   'response':r['response_parsed_boxed'],
                   'response_raw':r['response_raw'],
                   'gold':r['answer_gold'],
