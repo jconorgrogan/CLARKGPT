@@ -101,3 +101,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# Frozen 30-question confirmation trigger; evaluation code is unchanged.
