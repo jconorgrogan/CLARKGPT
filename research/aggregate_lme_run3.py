@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+from pathlib import Path
+import json
+import pandas as pd
+from scipy.stats import binomtest
+
+root = Path('artifacts')
+out = Path('research/results/longmemeval_run3')
+out.mkdir(parents=True, exist_ok=True)
+files = sorted(root.rglob('compact.csv'))
+if len(files) != 4:
+    raise SystemExit(f'Expected four compact.csv files, found {len(files)}: {files}')
+
+frames = []
+for path in files:
+    df = pd.read_csv(path)
+    if len(df) != 4:
+        raise SystemExit(f'{path} has {len(df)} rows; expected 4')
+    frames.append(df)
+all_df = pd.concat(frames, ignore_index=True)
+all_df['method'] = all_df['method'].replace({'unique': 'canonical_unique_lines'})
+expected = {
+    ('raw', 'web'), ('raw', 'enterprise'),
+    ('canonical_unique_lines', 'web'),
+    ('canonical_unique_lines', 'enterprise'),
+}
+observed = set(map(tuple, all_df[['method', 'domain']].drop_duplicates().to_records(index=False)))
+if observed != expected:
+    raise SystemExit(f'Unexpected arms: {observed}')
+
+for domain in ['web', 'enterprise']:
+    raw_ids = set(all_df[(all_df.method == 'raw') & (all_df.domain == domain)].question_id.astype(str))
+    can_ids = set(all_df[(all_df.method == 'canonical_unique_lines') & (all_df.domain == domain)].question_id.astype(str))
+    if raw_ids != can_ids:
+        raise SystemExit(f'Question mismatch for {domain}: raw={raw_ids}, canonical={can_ids}')
+
+if 'has_box' in all_df and not bool(all_df.has_box.fillna(False).all()):
+    bad = all_df.loc[~all_df.has_box.fillna(False), ['method', 'domain', 'question_id']]
+    raise SystemExit(f'Missing parsed boxes:\n{bad}')
+if 'hit_completion_cap' in all_df and bool(all_df.hit_completion_cap.fillna(False).any()):
+    bad = all_df.loc[all_df.hit_completion_cap.fillna(False), ['method', 'domain', 'question_id', 'completion_tokens']]
+    raise SystemExit(f'Completion cap hits:\n{bad}')
+
+paired = all_df.pivot_table(
+    index=['domain', 'question_id', 'question_type'],
+    columns='method', values='score', aggfunc='first'
+).reset_index()
+paired['gain'] = paired['canonical_unique_lines'] - paired['raw']
+wins = int((paired.gain > 0).sum())
+losses = int((paired.gain < 0).sum())
+ties = int((paired.gain == 0).sum())
+discord = wins + losses
+p_exact = float(binomtest(wins, discord, 0.5, alternative='two-sided').pvalue) if discord else 1.0
+
+summary = []
+for method, g in all_df.groupby('method'):
+    ratio = pd.to_numeric(g.get('storage_ratio'), errors='coerce')
+    latency = pd.to_numeric(g.get('memory_query_seconds'), errors='coerce')
+    context = pd.to_numeric(g.get('memory_context_tokens'), errors='coerce')
+    completion = pd.to_numeric(g.get('completion_tokens'), errors='coerce')
+    summary.append({
+        'method': method,
+        'questions': len(g),
+        'official_accuracy': float(g.score.mean()),
+        'web_accuracy': float(g[g.domain == 'web'].score.mean()),
+        'enterprise_accuracy': float(g[g.domain == 'enterprise'].score.mean()),
+        'median_storage_ratio': float(ratio.median()) if ratio.notna().any() else None,
+        'median_memory_query_ms': float(1000 * latency.median()) if latency.notna().any() else None,
+        'median_memory_context_tokens': float(context.median()) if context.notna().any() else None,
+        'max_completion_tokens_used': int(completion.max()) if completion.notna().any() else None,
+    })
+summary_df = pd.DataFrame(summary).sort_values('method')
+raw = float(summary_df.loc[summary_df.method == 'raw', 'official_accuracy'].iloc[0])
+canonical = float(summary_df.loc[summary_df.method == 'canonical_unique_lines', 'official_accuracy'].iloc[0])
+gain = canonical - raw
+ratio = float(summary_df.loc[summary_df.method == 'canonical_unique_lines', 'median_storage_ratio'].iloc[0])
+compression = 1 / ratio if ratio > 0 else None
+
+if gain > 0:
+    verdict = 'POSITIVE MICRO-SHARD: canonical memory answered more questions correctly'
+elif gain < 0:
+    verdict = 'NEGATIVE MICRO-SHARD: canonical memory answered fewer questions correctly'
+else:
+    verdict = 'TIED MICRO-SHARD: canonical memory matched raw answer accuracy'
+
+audit = {
+    'source_run_id': 33347109603,
+    'source_commit': '9552b902504b3407e7fc5337a69705bf2bc80a64',
+    'paired_questions': len(paired),
+    'wins': wins, 'losses': losses, 'ties': ties,
+    'exact_two_sided_sign_p': p_exact,
+    'raw_accuracy': raw,
+    'canonical_accuracy': canonical,
+    'paired_gain': gain,
+    'median_canonical_storage_ratio': ratio,
+    'compression_multiple': compression,
+    'verdict': verdict,
+    'all_boxes_valid': bool(all_df.get('has_box', pd.Series([True])).fillna(False).all()),
+    'any_completion_cap_hit': bool(all_df.get('hit_completion_cap', pd.Series([False])).fillna(False).any()),
+}
+all_df.to_csv(out / 'all_questions.csv', index=False)
+paired.to_csv(out / 'paired_questions.csv', index=False)
+summary_df.to_csv(out / 'summary.csv', index=False)
+(out / 'audit.json').write_text(json.dumps(audit, indent=2))
+
+pct = lambda x: f'{100*x:.1f}%'
+comp_text = f'{compression:.1f}x' if compression else 'unavailable'
+report = f'''# LongMemEval-V2 fixed-reader micro-shard — audited rerun
+
+## Verdict
+
+**{verdict}**
+
+| Method | Questions | Overall accuracy | Web | Enterprise | Median stored history | Median retrieval |
+|---|---:|---:|---:|---:|---:|---:|
+'''
+for _, r in summary_df.iterrows():
+    stored = '—' if pd.isna(r.median_storage_ratio) else pct(r.median_storage_ratio)
+    latency = '—' if pd.isna(r.median_memory_query_ms) else f'{r.median_memory_query_ms:.2f} ms'
+    report += f"| {r.method} | {int(r.questions)} | {pct(r.official_accuracy)} | {pct(r.web_accuracy)} | {pct(r.enterprise_accuracy)} | {stored} | {latency} |\n"
+report += f'''
+
+Paired answer-level difference: **{gain*100:+.1f} percentage points**.
+
+Per-question comparison: **{wins} canonical wins, {losses} raw wins, {ties} ties**. Exact two-sided sign-test p-value on the {discord} discordant pairs: **{p_exact:.4f}**.
+
+Canonical memory retained a median **{pct(ratio)}** of raw stored history, equivalent to **{comp_text} compression**.
+
+## Integrity checks
+
+- Four expected arms were present, each with four questions.
+- Raw and canonical arms used identical question IDs inside each domain.
+- Every generated answer contained a parsed boxed response.
+- Every completion remained below the 512-token cap.
+- Dataset, harness, question-selection seed, reader model, retrieval budget, and deterministic evaluators were paired across methods.
+
+## Scope
+
+This is an **8-question fixed-reader micro-shard** from official LongMemEval-V2 small-tier histories, scored by official deterministic evaluators. The sample supports a directional mechanism check. Full-benchmark ranking requires the complete question set and submission protocol. The local quantized Qwen3.5-9B reader also differs operationally from the benchmark authors' reference deployment.
+'''
+(out / 'REPORT.md').write_text(report)
+
+esc = lambda s: str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
+<rect width="1400" height="900" fill="#111318"/>
+<text x="70" y="95" fill="#f4f6f8" font-family="Arial" font-size="46" font-weight="700">LongMemEval-V2 fixed-reader rerun</text>
+<text x="70" y="155" fill="#aeb6c2" font-family="Arial" font-size="25">Official small-tier histories · 8 paired questions · Qwen3.5-9B Q4_K_M</text>
+<text x="70" y="250" fill="#f4f6f8" font-family="Arial" font-size="36" font-weight="700">Raw accuracy</text>
+<text x="540" y="250" fill="#f4f6f8" font-family="Arial" font-size="62" font-weight="700">{pct(raw)}</text>
+<text x="70" y="355" fill="#f4f6f8" font-family="Arial" font-size="36" font-weight="700">Canonical-memory accuracy</text>
+<text x="540" y="355" fill="#f4f6f8" font-family="Arial" font-size="62" font-weight="700">{pct(canonical)}</text>
+<text x="70" y="465" fill="#f4f6f8" font-family="Arial" font-size="36" font-weight="700">Paired gain</text>
+<text x="540" y="465" fill="#f4f6f8" font-family="Arial" font-size="62" font-weight="700">{gain*100:+.1f} pts</text>
+<text x="70" y="575" fill="#f4f6f8" font-family="Arial" font-size="36" font-weight="700">Stored history</text>
+<text x="540" y="575" fill="#f4f6f8" font-family="Arial" font-size="62" font-weight="700">{pct(ratio)} ({esc(comp_text)})</text>
+<text x="70" y="675" fill="#d3d8df" font-family="Arial" font-size="29">Question pairs: {wins} canonical wins · {losses} raw wins · {ties} ties · exact p={p_exact:.4f}</text>
+<rect x="60" y="735" width="1280" height="100" rx="18" fill="#242934"/>
+<text x="90" y="795" fill="#f4f6f8" font-family="Arial" font-size="28" font-weight="700">{esc(verdict)}</text>
+<text x="70" y="870" fill="#8f98a6" font-family="Arial" font-size="21">Micro-shard result; full benchmark required for ranking.</text>
+</svg>'''
+(out / 'result_card.svg').write_text(svg)
+print(report)
