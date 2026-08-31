@@ -12,12 +12,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Probe fixed reader endpoint
+      - name: Probe hosted GPT-4.1-mini reader endpoint
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python - <<'PY'
-          import json, os, urllib.request
+          import json, os, urllib.error, urllib.request
+
           payload = {
             "model": "openai/gpt-4.1-mini",
             "messages": [{"role":"user","content":"Return exactly OK"}],
@@ -27,15 +28,33 @@ jobs:
           req = urllib.request.Request(
             "https://models.github.ai/inference/chat/completions",
             data=json.dumps(payload).encode(),
-            headers={"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}", "Content-Type":"application/json"},
+            headers={
+              "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2026-03-10",
+              "Content-Type": "application/json",
+            },
             method="POST",
           )
-          with urllib.request.urlopen(req, timeout=120) as r:
-            out=r.read().decode()
-          print(out)
-          open("probe.json","w").write(out)
+          try:
+            with urllib.request.urlopen(req, timeout=120) as response:
+              body = response.read().decode()
+              status = response.status
+          except urllib.error.HTTPError as exc:
+            body = exc.read().decode(errors="replace")
+            status = exc.code
+          result = {"http_status": status, "body": body}
+          print(json.dumps(result, indent=2))
+          open("probe.json","w").write(json.dumps(result, indent=2))
+          if status != 200:
+            raise SystemExit(f"Hosted reader unavailable: HTTP {status}")
+          parsed = json.loads(body)
+          text = parsed["choices"][0]["message"]["content"].strip()
+          if text != "OK":
+            raise SystemExit(f"Unexpected reader response: {text!r}")
           PY
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: github-models-probe
           path: probe.json
