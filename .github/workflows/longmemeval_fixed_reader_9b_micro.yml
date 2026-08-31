@@ -1,9 +1,14 @@
 name: longmemeval-v2-fixed-reader-9b-micro
+
 on:
   push:
     branches: [irrelevance-benchmark-ladder]
     paths:
       - '.github/workflows/longmemeval_fixed_reader_9b_micro.yml'
+      - 'research/lme_patch_reader.py'
+      - 'research/lme_extract_fixed_reader.py'
+      - 'research/lme_fixed_reader_memory.py'
+      - 'research/lme_select_fixed_reader_subset.py'
   workflow_dispatch:
 
 jobs:
@@ -29,6 +34,7 @@ jobs:
       OPENAI_API_KEY: local-dummy-key
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -48,108 +54,28 @@ jobs:
           cp research/lme_fixed_reader_memory.py lme/memory_modules/distinction_tfidf.py
           sed -i '/sublinear_tf=True/d' lme/memory_modules/distinction_tfidf.py
           printf '\nfrom .distinction_tfidf import DistinctionTfidfMemory  # noqa: E402,F401\n' >> lme/memory_modules/memory.py
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path('lme/evaluation/harness.py')
-          text = path.read_text(encoding='utf-8')
-
-          needle = 'Answer based on your memory of the environment. '
-          replacement = (
-              'Answer based on your memory of the environment. '
-              'Give the shortest supported final answer. '
-          )
-          count = text.count(needle)
-          if count != 2:
-              raise SystemExit(f'Expected two reader-prompt occurrences, found {count}')
-          text = text.replace(needle, replacement)
-
-          old_question = '    question_block = f"\\n\\n### Question to answer:\\n{question_text}"\n'
-          new_question = (
-              '    question_block = (\n'
-              '        f"\\n\\n### Question to answer:\\n{question_text}"\n'
-              '        "\\n\\n### Required response:\\nReturn one JSON object with one field named answer. "\n'
-              '        "Put only the final benchmark answer in that field."\n'
-              '    )\n'
-          )
-          if text.count(old_question) != 1:
-              raise SystemExit('Could not locate question_block construction')
-          text = text.replace(old_question, new_question)
-
-          old_request = '''    req: dict[str, Any] = {
-        "model": args.model,
-        "messages": messages,
-        "timeout": args.timeout_seconds,
-    }
-'''
-          new_request = '''    req: dict[str, Any] = {
-        "model": args.model,
-        "messages": messages,
-        "timeout": args.timeout_seconds,
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "final_answer",
-                "strict": True,
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "answer": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 160,
-                        }
-                    },
-                    "required": ["answer"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-    }
-'''
-          if text.count(old_request) != 1:
-              raise SystemExit('Could not locate reader request construction')
-          text = text.replace(old_request, new_request)
-
-          old_parser = '        parsed_answer = extract_boxed_answer(response_raw)\n'
-          new_parser = '''        try:
-            structured = json.loads(response_raw)
-            answer_field = structured.get("answer", "") if isinstance(structured, dict) else structured
-            parsed_answer = str(answer_field).strip()
-            boxed_answer = extract_boxed_answer(parsed_answer)
-            if boxed_answer:
-                parsed_answer = boxed_answer
-        except Exception:
-            parsed_answer = extract_boxed_answer(response_raw)
-'''
-          if text.count(old_parser) != 1:
-              raise SystemExit('Could not locate boxed-answer parser')
-          text = text.replace(old_parser, new_parser)
-
-          path.write_text(text, encoding='utf-8')
-          PY
+          python research/lme_patch_reader.py lme/evaluation/harness.py
           cat > lme/reader_patch.json <<'JSON'
           {
             "reader": "Qwen/Qwen3.5-9B Q4_K_M",
             "reasoning": "off",
             "completion_token_cap": 192,
             "format_adapter": "llama.cpp strict JSON schema",
-            "schema": {"type": "object", "properties": {"answer": {"type": "string", "maxLength": 160}}, "required": ["answer"], "additionalProperties": false},
+            "schema": {
+              "type": "object",
+              "properties": {
+                "answer": {"type": "string", "maxLength": 160}
+              },
+              "required": ["answer"],
+              "additionalProperties": false
+            },
             "purpose": "deliver one short final answer to the official deterministic scorer"
           }
           JSON
 
       - name: Prepare identical four-question domain slice
         run: |
-          python - <<'PY'
-          from huggingface_hub import snapshot_download
-          snapshot_download(
-              repo_id='xiaowu0162/longmemeval-v2',
-              repo_type='dataset',
-              local_dir='lme/data/longmemeval-v2',
-              allow_patterns=['questions.jsonl','trajectories.jsonl','haystacks/lme_v2_small.json'],
-          )
-          PY
+          python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='xiaowu0162/longmemeval-v2', repo_type='dataset', local_dir='lme/data/longmemeval-v2', allow_patterns=['questions.jsonl','trajectories.jsonl','haystacks/lme_v2_small.json'])"
           python research/lme_select_fixed_reader_subset.py \
             --data-root lme/data/longmemeval-v2 \
             --output-root lme/subset \
@@ -157,9 +83,7 @@ jobs:
             --seed 260830
           mkdir -p lme/configs
           if [ '${{ matrix.method }}' = 'raw' ]; then MODE=raw; else MODE=unique_lines; fi
-          cat > lme/configs/current.json <<JSON
-          {"memory_type":"distinction_tfidf","memory_params":{"mode":"$MODE","chunk_chars":5000,"chunk_overlap":300,"top_k":20}}
-          JSON
+          printf '{"memory_type":"distinction_tfidf","memory_params":{"mode":"%s","chunk_chars":5000,"chunk_overlap":300,"top_k":20}}\n' "$MODE" > lme/configs/current.json
 
       - name: Build reader and fetch Qwen3.5-9B Q4_K_M
         run: |
@@ -205,45 +129,18 @@ jobs:
             --reader-max-concurrent-requests 1 \
             --prompt-build-max-workers 1 \
             --timeout-seconds 3600 \
-            --temperature 0 --top-p 1 \
+            --temperature 0 \
+            --top-p 1 \
             --reader-disable-thinking
 
       - name: Extract compact result
         working-directory: lme
         run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          import pandas as pd
-          method='${{ matrix.method }}'; domain='${{ matrix.domain }}'
-          run=Path(f'fixed_reader_{method}_{domain}')
-          rec=[json.loads(x) for x in (run/'per_question.jsonl').read_text().splitlines() if x.strip()]
-          rows=[]
-          for r in rec:
-              meta=r.get('memory_post_query_metadata') or {}
-              usage=r.get('usage') or {}
-              completion_tokens=int(usage.get('completion_tokens') or 0)
-              rows.append({
-                  'method':method,
-                  'domain':domain,
-                  'question_id':r['question_id'],
-                  'question_type':r['question_type'],
-                  'score':float(r['score']),
-                  'memory_query_seconds':float(r['memory_query_duration_seconds']),
-                  'memory_context_tokens':int(r['memory_context_token_count']),
-                  'raw_characters':meta.get('raw_characters'),
-                  'stored_characters':meta.get('stored_characters'),
-                  'storage_ratio':meta.get('storage_ratio'),
-                  'completion_tokens':completion_tokens,
-                  'hit_completion_cap':completion_tokens >= 192,
-                  'response':r['response_parsed_boxed'],
-                  'response_raw':r['response_raw'],
-                  'gold':r['answer_gold'],
-              })
-          df=pd.DataFrame(rows)
-          df.to_csv(run/'compact.csv',index=False)
-          print(df.to_string(index=False))
-          PY
+          python ../research/lme_extract_fixed_reader.py \
+            --run-dir 'fixed_reader_${{ matrix.method }}_${{ matrix.domain }}' \
+            --method '${{ matrix.method }}' \
+            --domain '${{ matrix.domain }}' \
+            --completion-cap 192
 
       - name: Print reader tail
         if: always()
